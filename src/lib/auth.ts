@@ -26,12 +26,13 @@ export const authOptions: AuthOptions = {
         const isValid = await bcrypt.compare(credentials.password, user.password)
         if (!isValid) return null
 
+        // NOTE: the profile photo is NOT put in the session. It is a data URL and
+        // would blow past the cookie size limit. Read it from /api/profile instead.
         return {
           id: user.id,
           email: user.email,
           name: user.name,
           role: user.role,
-          image: user.image,
         }
       },
     }),
@@ -40,11 +41,15 @@ export const authOptions: AuthOptions = {
   jwt: { maxAge: SESSION_MAX_AGE },
   pages: { signIn: '/login' },
   callbacks: {
-    async jwt({ token, user }) {
+    async jwt({ token, user, trigger, session }) {
       // `user` is only present on sign-in; copy id + role into the token once
       if (user) {
         token.id = user.id
         token.role = user.role
+      }
+      // useSession().update({ name }) after the profile form changes the name
+      if (trigger === 'update' && typeof session?.name === 'string' && session.name.trim()) {
+        token.name = session.name.trim()
       }
       return token
     },

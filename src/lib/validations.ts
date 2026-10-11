@@ -1,4 +1,11 @@
 import { z } from 'zod'
+import {
+  MAX_PHOTO_CHARS,
+  MAX_ROLES,
+  MAX_SKILLS,
+  ROLES,
+  SKILL_SET,
+} from '@/lib/constants'
 
 // Emails are trimmed + lowercased everywhere so "Jane@X.com" and "jane@x.com"
 // are the same account at registration and at login.
@@ -24,13 +31,55 @@ export const loginSchema = z.object({
 
 const optionalUrl = z.string().url('Invalid URL').optional().or(z.literal(''))
 
+const optionalEmail = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .email('Contact email is not valid')
+  .optional()
+  .or(z.literal(''))
+
+const optionalPhone = z
+  .string()
+  .trim()
+  .regex(/^[+()\d\s-]{7,20}$/, 'Phone number is not valid')
+  .optional()
+  .or(z.literal(''))
+
+const optionalPhoto = z
+  .string()
+  .refine(
+    (v) => /^data:image\/(jpeg|png|webp);base64,/.test(v) && v.length <= MAX_PHOTO_CHARS,
+    'Photo must be a JPEG, PNG or WebP image under 200 KB'
+  )
+  .optional()
+  .or(z.literal(''))
+
 export const profileSchema = z.object({
-  phone: z.string().optional(),
+  // account name (stored on the User row)
+  name: z.string().trim().min(2, 'Name must be at least 2 characters').optional(),
+
+  // onboarding fields
+  photo: optionalPhoto,
+  phone: optionalPhone,
+  contactEmail: optionalEmail,
+  currentDesignation: z.string().trim().max(100).optional(),
+  preferredRoles: z
+    .array(z.string())
+    .max(MAX_ROLES, `Pick at most ${MAX_ROLES} roles`)
+    .refine((roles) => roles.every((r) => ROLES.includes(r)), 'Unknown role selected')
+    .optional(),
+  skills: z
+    .array(z.string())
+    .max(MAX_SKILLS, `Pick at most ${MAX_SKILLS} skills`)
+    .refine((skills) => skills.every((s) => SKILL_SET.has(s)), 'Unknown skill selected')
+    .optional(),
+
+  // other profile fields
   location: z.string().optional(),
   headline: z.string().optional(),
   bio: z.string().max(500, 'Bio must be less than 500 characters').optional(),
   resumeUrl: optionalUrl,
-  skills: z.array(z.string()).optional(),
   experience: z.array(z.any()).optional(),
   education: z.array(z.any()).optional(),
   linkedIn: optionalUrl,

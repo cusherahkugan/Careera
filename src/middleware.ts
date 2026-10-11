@@ -24,6 +24,13 @@ export default withAuth(
       }
     }
 
+    // the profile / onboarding form is for job seekers only
+    if (path.startsWith('/onboarding')) {
+      if (token?.role !== 'JOB_SEEKER') {
+        return NextResponse.redirect(new URL('/dashboard', req.url))
+      }
+    }
+
     return NextResponse.next()
   },
   {
@@ -35,5 +42,5 @@ export default withAuth(
 )
 
 export const config = {
-  matcher: ['/dashboard/:path*'],
+  matcher: ['/dashboard/:path*', '/onboarding/:path*'],
 }

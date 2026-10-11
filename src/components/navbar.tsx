@@ -22,6 +22,11 @@ export function Navbar() {
               <Link href="/dashboard" className="text-zinc-600 hover:text-red-600">
                 {role === 'RECRUITER' ? 'My postings' : 'My applications'}
               </Link>
+              {role === 'JOB_SEEKER' && (
+                <Link href="/onboarding" className="text-zinc-600 hover:text-red-600">
+                  My profile
+                </Link>
+              )}
               <span className="hidden text-zinc-400 sm:inline">
                 {session.user.name}
                 <span className="ml-2 rounded border border-zinc-200 px-1.5 py-0.5 text-xs text-zinc-500">

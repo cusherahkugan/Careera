@@ -2,6 +2,8 @@ import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
   output: 'standalone', // needed for the Docker image
+  // resume parsing libraries must stay as plain Node requires, not bundled
+  serverExternalPackages: ['pdf-parse', 'mammoth'],
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: '**.supabase.co' },

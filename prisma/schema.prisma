@@ -50,26 +50,39 @@ model User {
 }
 
 model Profile {
-  id            String    @id @default(cuid())
-  userId        String    @unique
-  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  phone         String?
-  location      String?
-  headline      String?
-  bio           String?
-  resumeUrl     String?
-  
-  skills        String[]
-  experience    Json[]
-  education     Json[]
-  
-  linkedIn      String?
-  github        String?
-  portfolio     String?
-  
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id                  String    @id @default(cuid())
+  userId              String    @unique
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // --- contact + identity (collected during onboarding) ---
+  photo               String?   // small JPEG data URL (resized in the browser)
+  phone               String?
+  contactEmail        String?
+  location            String?
+  headline            String?
+  currentDesignation  String?
+  bio                 String?
+
+  // --- job preferences ---
+  preferredRoles      String[]
+  skills              String[]
+
+  // --- resume ---
+  resumeUrl           String?
+  resumeFileName      String?
+  resumeText          String?   // text extracted from the uploaded resume, used by the AI matcher
+
+  experience          Json[]
+  education           Json[]
+
+  linkedIn            String?
+  github              String?
+  portfolio           String?
+
+  onboardingCompleted Boolean   @default(false)
+
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 }
 
 model Company {

@@ -3,7 +3,11 @@ import { getServerSession } from 'next-auth'
 import { z } from 'zod'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { MIN_SKILLS } from '@/lib/constants'
 import { profileSchema } from '@/lib/validations'
+
+/** '' (cleared field) is stored as null; undefined means "leave unchanged". */
+const nullable = (v: string | undefined) => (v === undefined ? undefined : v.trim() === '' ? null : v.trim())
 
 // GET /api/profile
 export async function GET() {
@@ -25,14 +29,16 @@ export async function GET() {
       return NextResponse.json({ error: 'Profile not found' }, { status: 404 })
     }
 
-    return NextResponse.json({ profile })
+    // the extracted resume text can be large and the browser never needs it
+    const { resumeText, ...safe } = profile
+    return NextResponse.json({ profile: { ...safe, hasResume: !!resumeText } })
   } catch (error) {
     console.error('Profile fetch error:', error)
     return NextResponse.json({ error: 'Failed to fetch profile' }, { status: 500 })
   }
 }
 
-// PUT /api/profile
+// PUT /api/profile - save onboarding / profile edits (job seekers)
 export async function PUT(req: Request) {
   try {
     const session = await getServerSession(authOptions)
@@ -41,19 +47,59 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const data = profileSchema.parse(await req.json())
+    const { name, ...fields } = profileSchema.parse(await req.json())
 
-    const profile = await prisma.profile.upsert({
+    const data = {
+      photo: nullable(fields.photo),
+      phone: nullable(fields.phone),
+      contactEmail: nullable(fields.contactEmail),
+      currentDesignation: nullable(fields.currentDesignation),
+      location: nullable(fields.location),
+      headline: nullable(fields.headline),
+      bio: nullable(fields.bio),
+      resumeUrl: nullable(fields.resumeUrl),
+      linkedIn: nullable(fields.linkedIn),
+      github: nullable(fields.github),
+      portfolio: nullable(fields.portfolio),
+      preferredRoles: fields.preferredRoles,
+      skills: fields.skills,
+      experience: fields.experience,
+      education: fields.education,
+    }
+
+    if (name) {
+      await prisma.user.update({ where: { id: session.user.id }, data: { name } })
+    }
+
+    const saved = await prisma.profile.upsert({
       where: { userId: session.user.id },
       update: data,
       create: { userId: session.user.id, ...data },
     })
 
-    return NextResponse.json({ profile })
+    // the profile is "complete" once the onboarding essentials are all there
+    const complete =
+      !!saved.photo &&
+      !!saved.phone &&
+      !!saved.contactEmail &&
+      !!saved.currentDesignation &&
+      saved.preferredRoles.length >= 1 &&
+      saved.skills.length >= MIN_SKILLS
+
+    let profile = saved
+    if (complete !== saved.onboardingCompleted) {
+      profile = await prisma.profile.update({
+        where: { id: saved.id },
+        data: { onboardingCompleted: complete },
+      })
+    }
+
+    const { resumeText, ...safe } = profile
+    return NextResponse.json({ profile: { ...safe, hasResume: !!resumeText }, complete })
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json(
-        { error: 'Invalid input', details: error.errors },
+        { error: error.errors[0]?.message ?? 'Invalid input', details: error.errors },
         { status: 400 }
       )
     }

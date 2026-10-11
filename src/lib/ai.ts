@@ -1,4 +1,5 @@
 import OpenAI from 'openai'
+import type { CandidateProfile, JobForMatching } from '@/lib/recommend'
 
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -134,6 +135,74 @@ Return match score (0-100) and brief analysis as JSON only.`,
   } catch (error) {
     console.error('Job matching error:', error)
     return basicMatch(candidateSkills, jobSkills)
+  }
+}
+
+/**
+ * Score several jobs against one candidate in a SINGLE request, using the
+ * profile (skills, roles, designation) and the text of the uploaded resume.
+ * Returns null when no API key is set or the call fails, so callers can fall
+ * back to the local scores.
+ */
+export async function rankJobsWithAI(
+  candidate: CandidateProfile,
+  jobs: JobForMatching[]
+): Promise<Record<string, { score: number; analysis: string }> | null> {
+  if (!openai || jobs.length === 0) return null
+
+  const jobLines = jobs
+    .map(
+      (j) =>
+        `- id: ${j.id} | title: ${j.title} | skills: ${j.skills.join(', ')} | requirements: ${j.requirements
+          .slice(0, 6)
+          .join('; ')} | about: ${j.description.slice(0, 300)}`
+    )
+    .join('\n')
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: MODEL,
+      messages: [
+        {
+          role: 'system',
+          content: `You are a recruiter matching one candidate to job openings. Judge fit from the candidate's skills, preferred roles, current designation and resume. Return ONLY a JSON array, one object per job:
+[{"id": "job id exactly as given", "score": number 0-100, "analysis": "one short sentence (max 25 words) saying why"}]`,
+        },
+        {
+          role: 'user',
+          content: `CANDIDATE
+Current designation: ${candidate.currentDesignation || 'not given'}
+Preferred roles: ${candidate.preferredRoles.join(', ') || 'not given'}
+Skills: ${candidate.skills.join(', ') || 'none listed'}
+Positions held: ${candidate.experienceCount}
+Resume excerpt:
+${(candidate.resumeText ?? 'No resume uploaded').slice(0, 4000)}
+
+JOBS
+${jobLines}
+
+Return the JSON array only.`,
+        },
+      ],
+      temperature: 0.2,
+    })
+
+    const content = completion.choices[0]?.message?.content
+    if (!content) return null
+
+    const parsed = safeJson<Array<{ id: string; score: number; analysis: string }>>(content)
+    const out: Record<string, { score: number; analysis: string }> = {}
+    for (const item of parsed) {
+      if (!item?.id) continue
+      out[item.id] = {
+        score: Math.max(0, Math.min(100, Number(item.score) || 0)),
+        analysis: String(item.analysis ?? ''),
+      }
+    }
+    return out
+  } catch (error) {
+    console.error('Job ranking error:', error)
+    return null
   }
 }
 

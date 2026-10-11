@@ -22,19 +22,28 @@ export interface User {
 export interface Profile {
   id: string
   userId: string
+  photo: string | null
   phone: string | null
+  contactEmail: string | null
   location: string | null
   headline: string | null
+  currentDesignation: string | null
   bio: string | null
-  resumeUrl: string | null
+  preferredRoles: string[]
   skills: string[]
+  resumeUrl: string | null
+  resumeFileName: string | null
+  /** true when a resume has been uploaded (the text itself is never sent to the browser) */
+  hasResume: boolean
   experience: unknown[]
   education: unknown[]
   linkedIn: string | null
   github: string | null
   portfolio: string | null
+  onboardingCompleted: boolean
   createdAt: string
   updatedAt: string
+  user?: { name: string; email: string; image: string | null }
 }
 
 export interface Job {

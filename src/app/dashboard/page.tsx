@@ -14,9 +14,9 @@ import {
   getMatchScoreColor,
   getMatchScoreLabel,
 } from '@/lib/utils'
-import type { Application, ApplicationStatus, Job } from '@/types'
+import type { Application, ApplicationStatus, Job, Profile } from '@/types'
 
-type Recommendation = Job & { matchScore: number; matchAnalysis: string }
+type Recommendation = Job & { matchScore: number; matchAnalysis: string; matchedSkills?: string[] }
 
 const STATUSES: ApplicationStatus[] = ['PENDING', 'REVIEWED', 'INTERVIEW', 'ACCEPTED', 'REJECTED']
 
@@ -30,12 +30,14 @@ export default function DashboardPage() {
 
   const [applications, setApplications] = useState<Application[]>([])
   const [myJobs, setMyJobs] = useState<Job[]>([])
+  const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
 
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [recError, setRecError] = useState('')
   const [recLoading, setRecLoading] = useState(false)
+  const [recInfo, setRecInfo] = useState<{ usedAI: boolean; usedResume: boolean } | null>(null)
 
   const [updatingId, setUpdatingId] = useState<string | null>(null)
   const [updateError, setUpdateError] = useState('')
@@ -58,8 +60,20 @@ export default function DashboardPage() {
         setMyJobs(jobsRes.data.jobs)
         setApplications(appsRes.data.applications)
       } else {
-        const { data } = await axios.get('/api/applications')
-        setApplications(data.applications)
+        const [appsRes, profileRes] = await Promise.all([
+          axios.get('/api/applications'),
+          axios.get('/api/profile'),
+        ])
+        const p: Profile = profileRes.data.profile
+
+        // new account (or incomplete profile): finish onboarding first
+        if (!p.onboardingCompleted) {
+          router.replace('/onboarding')
+          return
+        }
+
+        setProfile(p)
+        setApplications(appsRes.data.applications)
       }
     } catch (err) {
       if (axios.isAxiosError(err) && err.response?.status === 401) {
@@ -77,21 +91,31 @@ export default function DashboardPage() {
     if (status === 'authenticated' && role) loadData()
   }, [status, role, loadData])
 
-  const loadRecommendations = async () => {
+  const loadRecommendations = useCallback(async () => {
     setRecError('')
     setRecLoading(true)
     try {
       const { data } = await axios.get('/api/ai/job-recommendations')
       setRecommendations(data.recommendations)
+      setRecInfo({ usedAI: data.usedAI, usedResume: data.usedResume })
       if (data.recommendations.length === 0) {
-        setRecError('No strong matches yet. Try adding more skills to your profile.')
+        setRecError('No strong matches yet. Try adding more skills or roles to your profile.')
       }
     } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.data?.needsProfile) {
+        router.replace('/onboarding')
+        return
+      }
       setRecError(errorText(err, 'Could not load recommendations'))
     } finally {
       setRecLoading(false)
     }
-  }
+  }, [router])
+
+  // recommendations load by themselves as soon as the profile is known to be complete
+  useEffect(() => {
+    if (role === 'JOB_SEEKER' && profile?.onboardingCompleted) loadRecommendations()
+  }, [role, profile?.onboardingCompleted, loadRecommendations])
 
   const updateStatus = async (appId: string, next: ApplicationStatus) => {
     setUpdateError('')
@@ -112,16 +136,43 @@ export default function DashboardPage() {
 
   const isRecruiter = role === 'RECRUITER'
 
+  // job seekers: wait for the profile check so incomplete accounts never see an empty dashboard
+  if (!isRecruiter && !profile && !loadError) {
+    return <div className="min-h-screen bg-white p-8 text-zinc-500">Loading…</div>
+  }
+
   return (
     <div className="min-h-screen bg-white">
       <Navbar />
       <main className="mx-auto max-w-4xl px-5 py-10">
-        <h1 className="font-serif text-3xl font-bold text-zinc-900">
-          Hello, <span className="text-red-600">{session?.user.name}</span>
-        </h1>
-        <p className="mb-10 mt-1 text-zinc-500">
-          {isRecruiter ? 'Your job postings and the people who applied' : 'Your applications'}
-        </p>
+        <div className="mb-10 flex items-center gap-4">
+          {!isRecruiter && profile?.photo && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={profile.photo}
+              alt=""
+              className="h-16 w-16 rounded-full border border-zinc-200 object-cover"
+            />
+          )}
+          <div>
+            <h1 className="font-serif text-3xl font-bold text-zinc-900">
+              Hello, <span className="text-red-600">{session?.user.name}</span>
+            </h1>
+            <p className="mt-1 text-zinc-500">
+              {isRecruiter
+                ? 'Your job postings and the people who applied'
+                : profile?.currentDesignation || 'Your applications'}
+              {!isRecruiter && (
+                <>
+                  {' · '}
+                  <Link href="/onboarding" className="text-red-600 hover:text-red-700">
+                    Edit profile
+                  </Link>
+                </>
+              )}
+            </p>
+          </div>
+        </div>
 
         {loadError && (
           <Alert variant="error" className="mb-6">
@@ -217,17 +268,34 @@ export default function DashboardPage() {
         ) : (
           <>
             <section className="mb-12">
-              <div className="mb-4 flex items-center justify-between">
+              <div className="mb-1 flex items-center justify-between">
                 <h2 className="font-serif text-xl font-bold text-zinc-900">Recommended for you</h2>
                 <button
                   onClick={loadRecommendations}
                   disabled={recLoading}
-                  className="rounded bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                  className="rounded border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 hover:border-red-600 hover:text-red-600 disabled:opacity-50"
                 >
-                  {recLoading ? 'Looking…' : 'Find matches'}
+                  {recLoading ? 'Looking…' : 'Refresh'}
                 </button>
               </div>
+              <p className="mb-4 text-sm text-zinc-500">
+                Based on your skills, preferred roles
+                {profile?.hasResume ? ' and your resume' : ''}.
+                {!profile?.hasResume && (
+                  <>
+                    {' '}
+                    <Link href="/onboarding" className="text-red-600 hover:text-red-700">
+                      Upload your resume
+                    </Link>{' '}
+                    for sharper matches.
+                  </>
+                )}
+                {recInfo && !recInfo.usedAI && ' (AI scoring is off, showing skill-based matches.)'}
+              </p>
               {recError && <Alert variant="info" className="mb-4">{recError}</Alert>}
+              {recLoading && recommendations.length === 0 && (
+                <p className="text-zinc-500">Finding jobs that fit you…</p>
+              )}
               <div className="divide-y divide-zinc-200 border-y border-zinc-200 empty:hidden">
                 {recommendations.map((job) => (
                   <div key={job.id} className="py-4">
@@ -243,6 +311,15 @@ export default function DashboardPage() {
                       </span>
                     </div>
                     <p className="mt-1 text-sm text-zinc-500">{job.matchAnalysis}</p>
+                    {job.matchedSkills && job.matchedSkills.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {job.matchedSkills.map((s) => (
+                          <span key={s} className="rounded bg-red-50 px-2 py-0.5 text-xs text-red-700">
+                            {s}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

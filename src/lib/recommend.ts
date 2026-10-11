@@ -1,0 +1,92 @@
+// Local (no API key needed) job scoring. It runs on every active job, then the
+// best candidates are re-scored by the AI in ai.ts.
+
+export interface CandidateProfile {
+  skills: string[]
+  preferredRoles: string[]
+  currentDesignation?: string | null
+  headline?: string | null
+  resumeText?: string | null
+  experienceCount: number
+}
+
+export interface JobForMatching {
+  id: string
+  title: string
+  description: string
+  skills: string[]
+  requirements: string[]
+}
+
+export interface LocalMatch {
+  score: number
+  matchedSkills: string[]
+  roleMatch: boolean
+}
+
+const STOP_WORDS = new Set(['senior', 'junior', 'lead', 'the', 'and', 'for', 'engineer', 'developer'])
+
+function tokens(s: string): string[] {
+  return s
+    .toLowerCase()
+    .split(/[^a-z0-9+#]+/)
+    .filter((t) => t.length >= 3 && !STOP_WORDS.has(t))
+}
+
+export function localMatch(candidate: CandidateProfile, job: JobForMatching): LocalMatch {
+  const mySkills = new Set(candidate.skills.map((s) => s.toLowerCase()))
+  const resume = (candidate.resumeText ?? '').toLowerCase()
+
+  // 1) skills: full credit if listed on the profile, partial if only the resume mentions it
+  const matchedSkills: string[] = []
+  let skillPoints = 0
+  for (const skill of job.skills) {
+    const key = skill.toLowerCase()
+    if (mySkills.has(key)) {
+      matchedSkills.push(skill)
+      skillPoints += 1
+    } else if (resume && resume.includes(key)) {
+      matchedSkills.push(skill)
+      skillPoints += 0.6
+    }
+  }
+  const skillScore = Math.min(skillPoints / Math.max(job.skills.length, 1), 1)
+
+  // 2) role: does the title look like something the person wants / does today?
+  const title = job.title.toLowerCase()
+  const wanted = [...candidate.preferredRoles, candidate.currentDesignation ?? ''].filter(Boolean)
+  let roleScore = 0
+  let roleMatch = false
+  for (const role of wanted) {
+    const r = role.toLowerCase()
+    if (title.includes(r) || r.includes(title)) {
+      roleScore = 1
+      roleMatch = true
+      break
+    }
+    const titleTokens = new Set(tokens(job.title))
+    const roleTokens = tokens(role)
+    if (roleTokens.length > 0) {
+      const overlap = roleTokens.filter((t) => titleTokens.has(t)).length / roleTokens.length
+      roleScore = Math.max(roleScore, overlap * 0.7)
+    }
+  }
+  if (roleScore >= 0.5) roleMatch = true
+
+  // 3) breadth: how many of the person's skills show up in the job text at all
+  const jobText = `${job.description} ${job.requirements.join(' ')}`.toLowerCase()
+  const mentioned = candidate.skills.filter((s) => jobText.includes(s.toLowerCase())).length
+  const breadth = Math.min(mentioned / Math.max(Math.min(candidate.skills.length, 8), 1), 1)
+
+  const score = Math.round(100 * (0.6 * skillScore + 0.3 * roleScore + 0.1 * breadth))
+  return { score, matchedSkills, roleMatch }
+}
+
+export function describeLocalMatch(job: JobForMatching, m: LocalMatch): string {
+  const parts: string[] = []
+  if (job.skills.length > 0) {
+    parts.push(`Matches ${m.matchedSkills.length} of ${job.skills.length} required skills`)
+  }
+  if (m.roleMatch) parts.push('fits a role you are looking for')
+  return parts.length > 0 ? parts.join(', ') + '.' : 'Based on your profile.'
+}

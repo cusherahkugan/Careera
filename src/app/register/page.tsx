@@ -28,9 +28,12 @@ function RegisterForm() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
+  // Already signed in (including right after we sign the new user in below):
+  // the dashboard sends job seekers with an incomplete profile on to /onboarding.
   useEffect(() => {
-    if (status === 'authenticated') router.replace('/dashboard')
-  }, [status, router])
+    // `loading` is still true while we sign in and redirect ourselves below
+    if (status === 'authenticated' && !loading) router.replace('/dashboard')
+  }, [status, loading, router])
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }))
@@ -74,7 +77,7 @@ function RegisterForm() {
       return
     }
 
-    // Account exists now: sign straight in so the visitor lands on their dashboard.
+    // Account exists now: sign straight in so the session is kept (7 days).
     const result = await signIn('credentials', {
       email,
       password: formData.password,
@@ -87,7 +90,8 @@ function RegisterForm() {
       return
     }
 
-    router.push('/dashboard')
+    // job seekers finish their profile first; recruiters go to their dashboard
+    router.push(formData.role === 'JOB_SEEKER' ? '/onboarding' : '/dashboard')
     router.refresh()
   }
 
@@ -98,7 +102,7 @@ function RegisterForm() {
         : 'border-zinc-300 text-zinc-600 hover:border-zinc-400'
     }`
 
-  if (status === 'authenticated') return <div className="min-h-screen bg-zinc-50" />
+  if (status === 'authenticated' && !loading) return <div className="min-h-screen bg-zinc-50" />
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-zinc-50 p-4">
