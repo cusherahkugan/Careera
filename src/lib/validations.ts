@@ -1,12 +1,16 @@
 import { z } from 'zod'
 
+// Emails are trimmed + lowercased everywhere so "Jane@X.com" and "jane@x.com"
+// are the same account at registration and at login.
+const email = z.string().trim().toLowerCase().email('Invalid email address')
+
 export const registerSchema = z
   .object({
-    name: z.string().min(2, 'Name must be at least 2 characters'),
-    email: z.string().email('Invalid email address'),
+    name: z.string().trim().min(2, 'Name must be at least 2 characters'),
+    email,
     password: z.string().min(6, 'Password must be at least 6 characters'),
     role: z.enum(['JOB_SEEKER', 'RECRUITER']),
-    companyName: z.string().min(2).optional(),
+    companyName: z.string().trim().min(2).optional(),
   })
   .refine((d) => d.role !== 'RECRUITER' || !!d.companyName, {
     message: 'Company name is required for recruiters',
@@ -14,7 +18,7 @@ export const registerSchema = z
   })
 
 export const loginSchema = z.object({
-  email: z.string().email('Invalid email address'),
+  email,
   password: z.string().min(1, 'Password is required'),
 })
 

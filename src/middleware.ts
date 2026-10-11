@@ -1,6 +1,9 @@
 import { withAuth } from 'next-auth/middleware'
 import { NextResponse } from 'next/server'
 
+// Guards PAGES only. API routes check the session themselves and answer with
+// a JSON 401/403, which is what axios callers need (a redirect to /login
+// would hand them HTML instead).
 export default withAuth(
   function middleware(req) {
     const token = req.nextauth.token
@@ -32,10 +35,5 @@ export default withAuth(
 )
 
 export const config = {
-  matcher: [
-    '/dashboard/:path*',
-    '/api/profile/:path*',
-    '/api/applications/:path*',
-    '/api/ai/:path*',
-  ],
+  matcher: ['/dashboard/:path*'],
 }

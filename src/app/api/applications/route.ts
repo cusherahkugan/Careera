@@ -16,7 +16,9 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   ])
 }
 
-// GET /api/applications - current user's applications
+// GET /api/applications
+//  - JOB_SEEKER: the applications they submitted
+//  - RECRUITER:  applications received on jobs they posted (with applicant details)
 export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions)
@@ -27,17 +29,32 @@ export async function GET(req: Request) {
 
     const { searchParams } = new URL(req.url)
     const status = searchParams.get('status')
+    const jobId = searchParams.get('jobId')
 
-    const where: Prisma.ApplicationWhereInput = { applicantId: session.user.id }
+    const where: Prisma.ApplicationWhereInput =
+      session.user.role === 'RECRUITER'
+        ? { job: { recruiterId: session.user.id } }
+        : { applicantId: session.user.id }
 
     if (status && Object.values(ApplicationStatus).includes(status as ApplicationStatus)) {
       where.status = status as ApplicationStatus
     }
+    if (jobId && session.user.role === 'RECRUITER') where.jobId = jobId
 
     const applications = await prisma.application.findMany({
       where,
       include: {
         job: { include: { company: { select: { name: true, logo: true } } } },
+        ...(session.user.role === 'RECRUITER' && {
+          applicant: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              profile: { select: { headline: true, skills: true, location: true } },
+            },
+          },
+        }),
       },
       orderBy: { createdAt: 'desc' },
     })

@@ -75,6 +75,17 @@ export interface Application {
   createdAt: string
   updatedAt: string
   job?: Job
+  /** Only present when a recruiter fetches applications */
+  applicant?: {
+    id: string
+    name: string
+    email: string
+    profile?: {
+      headline: string | null
+      skills: string[]
+      location: string | null
+    } | null
+  }
 }
 
 export interface JobFilters {

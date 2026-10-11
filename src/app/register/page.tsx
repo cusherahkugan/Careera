@@ -1,9 +1,10 @@
 'use client'
 
-import { Suspense, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import axios from 'axios'
+import { signIn, useSession } from 'next-auth/react'
 import { Alert } from '@/components/ui/alert'
 
 const inputCls =
@@ -13,6 +14,7 @@ const labelCls = 'mb-1.5 block text-sm font-medium text-zinc-700'
 function RegisterForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const { status } = useSession()
   const defaultRole = searchParams.get('role') === 'recruiter' ? 'RECRUITER' : 'JOB_SEEKER'
 
   const [formData, setFormData] = useState({
@@ -25,6 +27,10 @@ function RegisterForm() {
   })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (status === 'authenticated') router.replace('/dashboard')
+  }, [status, router])
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }))
@@ -42,22 +48,22 @@ function RegisterForm() {
       setError('Password must be at least 6 characters')
       return
     }
-    if (formData.role === 'RECRUITER' && !formData.companyName) {
+    if (formData.role === 'RECRUITER' && !formData.companyName.trim()) {
       setError('Company name is required for recruiters')
       return
     }
 
     setLoading(true)
+    const email = formData.email.trim().toLowerCase()
 
     try {
       await axios.post('/api/auth/register', {
         name: formData.name,
-        email: formData.email,
+        email,
         password: formData.password,
         role: formData.role,
-        companyName: formData.companyName || undefined,
+        companyName: formData.companyName.trim() || undefined,
       })
-      router.push('/login')
     } catch (err) {
       setError(
         axios.isAxiosError(err)
@@ -65,7 +71,24 @@ function RegisterForm() {
           : 'Registration failed'
       )
       setLoading(false)
+      return
     }
+
+    // Account exists now: sign straight in so the visitor lands on their dashboard.
+    const result = await signIn('credentials', {
+      email,
+      password: formData.password,
+      redirect: false,
+    })
+
+    if (!result || result.error) {
+      // account was created but auto sign-in failed; let them sign in manually
+      router.push('/login')
+      return
+    }
+
+    router.push('/dashboard')
+    router.refresh()
   }
 
   const roleBtn = (active: boolean) =>
@@ -74,6 +97,8 @@ function RegisterForm() {
         ? 'border-red-600 bg-red-50 text-red-700'
         : 'border-zinc-300 text-zinc-600 hover:border-zinc-400'
     }`
+
+  if (status === 'authenticated') return <div className="min-h-screen bg-zinc-50" />
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-zinc-50 p-4">
@@ -114,14 +139,15 @@ function RegisterForm() {
 
             <div>
               <label htmlFor="name" className={labelCls}>Full name</label>
-              <input id="name" name="name" value={formData.name} onChange={handleChange}
-                className={inputCls} placeholder="Jane Doe" required />
+              <input id="name" name="name" autoComplete="name" value={formData.name}
+                onChange={handleChange} className={inputCls} placeholder="Jane Doe" required />
             </div>
 
             <div>
               <label htmlFor="email" className={labelCls}>Email address</label>
-              <input id="email" name="email" type="email" value={formData.email}
-                onChange={handleChange} className={inputCls} placeholder="you@example.com" required />
+              <input id="email" name="email" type="email" autoComplete="email"
+                value={formData.email} onChange={handleChange} className={inputCls}
+                placeholder="you@example.com" required />
             </div>
 
             {formData.role === 'RECRUITER' && (
@@ -134,14 +160,16 @@ function RegisterForm() {
 
             <div>
               <label htmlFor="password" className={labelCls}>Password</label>
-              <input id="password" name="password" type="password" value={formData.password}
-                onChange={handleChange} className={inputCls} placeholder="At least 6 characters" required />
+              <input id="password" name="password" type="password" autoComplete="new-password"
+                value={formData.password} onChange={handleChange} className={inputCls}
+                placeholder="At least 6 characters" required />
             </div>
 
             <div>
               <label htmlFor="confirmPassword" className={labelCls}>Confirm password</label>
               <input id="confirmPassword" name="confirmPassword" type="password"
-                value={formData.confirmPassword} onChange={handleChange} className={inputCls} required />
+                autoComplete="new-password" value={formData.confirmPassword}
+                onChange={handleChange} className={inputCls} required />
             </div>
 
             <button

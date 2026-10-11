@@ -1,7 +1,7 @@
 'use client'
 
-import { useState } from 'react'
-import { signIn } from 'next-auth/react'
+import { useEffect, useState } from 'react'
+import { signIn, useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Alert } from '@/components/ui/alert'
@@ -9,12 +9,24 @@ import { Alert } from '@/components/ui/alert'
 const inputCls =
   'w-full rounded border border-zinc-300 bg-white px-3 py-2.5 text-zinc-900 placeholder-zinc-400 focus:border-red-600 focus:outline-none focus:ring-1 focus:ring-red-600'
 
+// only follow same-site paths so ?callbackUrl= can't be used as an open redirect
+function safeCallback(): string {
+  const cb = new URLSearchParams(window.location.search).get('callbackUrl')
+  return cb && cb.startsWith('/') && !cb.startsWith('//') ? cb : '/dashboard'
+}
+
 export default function LoginPage() {
   const router = useRouter()
+  const { status } = useSession()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  // already signed in? no reason to see the login form
+  useEffect(() => {
+    if (status === 'authenticated') router.replace(safeCallback())
+  }, [status, router])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -22,23 +34,27 @@ export default function LoginPage() {
     setLoading(true)
 
     try {
-      const result = await signIn('credentials', { email, password, redirect: false })
+      const result = await signIn('credentials', {
+        email: email.trim().toLowerCase(),
+        password,
+        redirect: false,
+      })
 
-      if (result?.error) {
+      if (!result || result.error) {
         setError('Invalid email or password')
         setLoading(false)
         return
       }
 
-      // go back to where the visitor came from (only same-site paths)
-      const cb = new URLSearchParams(window.location.search).get('callbackUrl')
-      router.push(cb && cb.startsWith('/') && !cb.startsWith('//') ? cb : '/dashboard')
+      router.push(safeCallback())
       router.refresh()
     } catch {
       setError('Something went wrong. Please try again.')
       setLoading(false)
     }
   }
+
+  if (status === 'authenticated') return <div className="min-h-screen bg-zinc-50" />
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-zinc-50 p-4">
@@ -64,6 +80,7 @@ export default function LoginPage() {
               <input
                 id="email"
                 type="email"
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className={inputCls}
@@ -79,6 +96,7 @@ export default function LoginPage() {
               <input
                 id="password"
                 type="password"
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className={inputCls}
