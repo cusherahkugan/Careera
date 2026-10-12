@@ -6,11 +6,14 @@ const prisma = new PrismaClient()
 async function main() {
   console.log('🌱 Starting database seed...')
 
-  // Clear existing data
+   await prisma.notification.deleteMany()
+  await prisma.interview.deleteMany()
+  await prisma.applicationEvent.deleteMany()
   await prisma.message.deleteMany()
   await prisma.application.deleteMany()
   await prisma.job.deleteMany()
   await prisma.company.deleteMany()
+  await prisma.resumeFile.deleteMany()
   await prisma.profile.deleteMany()
   await prisma.user.deleteMany()
 
@@ -25,6 +28,10 @@ async function main() {
     profile: {
       create: {
         phone: '+1234567890',
+        onboardingCompleted: true,
+        contactEmail: 'seeker@example.com',
+        currentDesignation: 'Senior Software Engineer at Tech Corp',
+        preferredRoles: ['Full Stack Developer', 'Software Engineer'],
         location: 'San Francisco, CA',
         headline: 'Full Stack Developer',
         bio: 'Passionate software engineer with 5 years of experience building scalable web applications.',
@@ -216,20 +223,45 @@ async function main() {
   const jobList = await prisma.job.findMany()
   
   if (jobList.length > 0) {
-    await prisma.application.create({
+        const application = await prisma.application.create({
       data: {
         jobId: jobList[0].id,
         applicantId: jobSeeker.id,
-        coverLetter: 'I am excited to apply for this position. My experience with React and Node.js aligns perfectly with your requirements. I have successfully delivered multiple full-stack projects and would love to contribute to your team.',
+        coverLetter: 'I am excited to apply for this position. My experience with React and Node.js aligns perfectly with your requirements.',
         resumeUrl: jobSeeker.profile?.resumeUrl,
-        status: 'PENDING',
+        status: 'INTERVIEW',
         aiScore: 85.5,
         aiNotes: 'Strong technical match with 6/6 required skills. Relevant experience in similar role.',
-      }
+        events: {
+          create: [
+            { type: 'APPLIED', title: 'Application submitted' },
+            { type: 'STATUS', title: 'Status changed to "Interview stage"' },
+          ],
+        },
+        interviews: {
+          create: [
+            {
+              scheduledAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+              durationMins: 45,
+              mode: 'VIDEO',
+              location: 'https://meet.google.com/demo-link',
+              notes: 'Technical discussion with the engineering lead.',
+            },
+          ],
+        },
+      },
     })
 
-    console.log('📝 Created sample application')
-  }
+    await prisma.notification.create({
+      data: {
+        userId: jobSeeker.id,
+        title: 'Interview scheduled: Senior Full Stack Engineer',
+        body: 'InnovateTech Solutions invited you to an interview. Please confirm.',
+        link: `/applications/${application.id}`,
+      },
+    })
+
+    console.log('📝 Created sample application with an interview')
 
   console.log('✅ Database seeded successfully!')
   console.log('\n📧 Test Accounts:')

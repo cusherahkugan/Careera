@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { calculateJobMatch } from '@/lib/ai'
+import { logEvent, notify } from '@/lib/notify'
 import { applicationSchema } from '@/lib/validations'
 
 const SCORING_TIMEOUT_MS = 6000
@@ -27,25 +28,26 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
+    const isRecruiter = session.user.role === 'RECRUITER'
     const { searchParams } = new URL(req.url)
     const status = searchParams.get('status')
     const jobId = searchParams.get('jobId')
 
-    const where: Prisma.ApplicationWhereInput =
-      session.user.role === 'RECRUITER'
-        ? { job: { recruiterId: session.user.id } }
-        : { applicantId: session.user.id }
+    const where: Prisma.ApplicationWhereInput = isRecruiter
+      ? { job: { recruiterId: session.user.id } }
+      : { applicantId: session.user.id }
 
     if (status && Object.values(ApplicationStatus).includes(status as ApplicationStatus)) {
       where.status = status as ApplicationStatus
     }
-    if (jobId && session.user.role === 'RECRUITER') where.jobId = jobId
+    if (jobId && isRecruiter) where.jobId = jobId
 
     const applications = await prisma.application.findMany({
       where,
       include: {
         job: { include: { company: { select: { name: true, logo: true } } } },
-        ...(session.user.role === 'RECRUITER' && {
+        interviews: { orderBy: { scheduledAt: 'asc' } },
+        ...(isRecruiter && {
           applicant: {
             select: {
               id: true,
@@ -97,22 +99,26 @@ export async function POST(req: Request) {
     if (!job.isActive) {
       return NextResponse.json({ error: 'This job is no longer open' }, { status: 400 })
     }
+    if (!profile || !profile.onboardingCompleted) {
+      return NextResponse.json(
+        { error: 'Complete your profile before applying', needsProfile: true },
+        { status: 400 }
+      )
+    }
 
     // Match scoring is a nice extra. It must never block or break applying.
     let aiScore: number | null = null
     let aiNotes: string | null = null
 
-    if (profile) {
-      try {
-        const match = await withTimeout(
-          calculateJobMatch(profile.skills, profile.experience as unknown[], job.skills, job.requirements),
-          SCORING_TIMEOUT_MS
-        )
-        aiScore = match.score
-        aiNotes = match.analysis
-      } catch (error) {
-        console.error('Match scoring skipped:', error)
-      }
+    try {
+      const match = await withTimeout(
+        calculateJobMatch(profile.skills, profile.experience as unknown[], job.skills, job.requirements),
+        SCORING_TIMEOUT_MS
+      )
+      aiScore = match.score
+      aiNotes = match.analysis
+    } catch (error) {
+      console.error('Match scoring skipped:', error)
     }
 
     try {
@@ -121,15 +127,32 @@ export async function POST(req: Request) {
           jobId: data.jobId,
           applicantId: session.user.id,
           coverLetter: data.coverLetter,
-          resumeUrl: data.resumeUrl || profile?.resumeUrl || null,
+          resumeUrl: data.resumeUrl || profile.resumeUrl || null,
           aiScore,
           aiNotes,
         },
         include: { job: { include: { company: true } } },
       })
+
+      const link = `/applications/${application.id}`
+      await logEvent(application.id, 'APPLIED', 'Application submitted')
+      await Promise.all([
+        notify(job.recruiterId, {
+          title: `New application: ${job.title}`,
+          body: `${session.user.name ?? 'A candidate'} applied for ${job.title}.${
+            aiScore !== null ? ` Match score: ${Math.round(aiScore)}%.` : ''
+          }`,
+          link,
+        }),
+        notify(session.user.id, {
+          title: `Application sent: ${job.title}`,
+          body: `Your application to ${application.job.company.name} was received. We will email you when the status changes.`,
+          link,
+        }),
+      ])
+
       return NextResponse.json({ application }, { status: 201 })
     } catch (error) {
-      // two clicks at once: the database unique key caught the second one
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         return NextResponse.json({ error: 'You already applied to this job' }, { status: 409 })
       }

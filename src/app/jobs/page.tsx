@@ -8,6 +8,7 @@ import { Navbar } from '@/components/navbar'
 import { Alert } from '@/components/ui/alert'
 import { formatRelativeTime, formatSalary, jobTypeColors } from '@/lib/utils'
 import type { Job } from '@/types'
+import Link from 'next/link'
 
 type Notice = { type: 'error' | 'success'; text: string }
 
@@ -79,7 +80,9 @@ export default function JobsPage() {
       setNotice(jobId, { type: 'success', text: 'Application sent' })
     } catch (err) {
       if (axios.isAxiosError(err)) {
-        if (err.response?.status === 409) {
+                if (err.response?.data?.needsProfile) {
+          router.push('/onboarding')
+        } else if (err.response?.status === 409) {
           setApplied((prev) => new Set(prev).add(jobId))
           setNotice(jobId, { type: 'success', text: 'You already applied to this job' })
         } else if (err.response?.status === 401) {
@@ -139,7 +142,9 @@ export default function JobsPage() {
                 <article key={job.id} className="py-6">
                   <div className="flex items-start justify-between gap-4">
                     <div>
-                      <h2 className="text-xl font-semibold text-zinc-900">{job.title}</h2>
+                     <h2 className="text-xl font-semibold text-zinc-900">
+  <Link href={`/jobs/${job.id}`} className="hover:text-red-600">{job.title}</Link>
+</h2>
                       <p className="mt-1 text-sm text-zinc-500">
                         {job.company?.name} · {job.location} · {formatSalary(job.salary)} ·{' '}
                         {formatRelativeTime(job.createdAt)}

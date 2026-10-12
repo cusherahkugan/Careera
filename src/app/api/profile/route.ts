@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
+import { Prisma } from '@prisma/client'
 import { z } from 'zod'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
@@ -9,7 +10,11 @@ import { profileSchema } from '@/lib/validations'
 /** '' (cleared field) is stored as null; undefined means "leave unchanged". */
 const nullable = (v: string | undefined) => (v === undefined ? undefined : v.trim() === '' ? null : v.trim())
 
-// GET /api/profile
+const profileInclude = {
+  user: { select: { name: true, email: true, image: true } },
+} satisfies Prisma.ProfileInclude
+
+// GET /api/profile  (a job seeker without a profile row gets an empty one)
 export async function GET() {
   try {
     const session = await getServerSession(authOptions)
@@ -18,18 +23,23 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const profile = await prisma.profile.findUnique({
+    let profile = await prisma.profile.findUnique({
       where: { userId: session.user.id },
-      include: {
-        user: { select: { name: true, email: true, image: true } },
-      },
+      include: profileInclude,
     })
+
+    if (!profile && session.user.role === 'JOB_SEEKER') {
+      profile = await prisma.profile.create({
+        data: { userId: session.user.id },
+        include: profileInclude,
+      })
+    }
 
     if (!profile) {
       return NextResponse.json({ error: 'Profile not found' }, { status: 404 })
     }
 
-    // the extracted resume text can be large and the browser never needs it
+    // the extracted resume text is large and the browser never needs it
     const { resumeText, ...safe } = profile
     return NextResponse.json({ profile: { ...safe, hasResume: !!resumeText } })
   } catch (error) {
@@ -49,6 +59,11 @@ export async function PUT(req: Request) {
 
     const { name, ...fields } = profileSchema.parse(await req.json())
 
+    // de-duplicate skills ignoring case ("react" + "React")
+    const skills = fields.skills
+      ? [...new Map<string, string>(fields.skills.map((s) => [s.toLowerCase(), s] as [string, string])).values()]
+      : undefined
+
     const data = {
       photo: nullable(fields.photo),
       phone: nullable(fields.phone),
@@ -62,9 +77,9 @@ export async function PUT(req: Request) {
       github: nullable(fields.github),
       portfolio: nullable(fields.portfolio),
       preferredRoles: fields.preferredRoles,
-      skills: fields.skills,
-      experience: fields.experience,
-      education: fields.education,
+      skills,
+      experience: fields.experience as Prisma.InputJsonValue[] | undefined,
+      education: fields.education as Prisma.InputJsonValue[] | undefined,
     }
 
     if (name) {
@@ -77,7 +92,6 @@ export async function PUT(req: Request) {
       create: { userId: session.user.id, ...data },
     })
 
-    // the profile is "complete" once the onboarding essentials are all there
     const complete =
       !!saved.photo &&
       !!saved.phone &&

@@ -8,6 +8,10 @@ export type ApplicationStatus =
   | 'INTERVIEW'
   | 'ACCEPTED'
   | 'REJECTED'
+  | 'WITHDRAWN'
+
+export type InterviewMode = 'VIDEO' | 'PHONE' | 'ONSITE'
+export type InterviewStatus = 'SCHEDULED' | 'CONFIRMED' | 'COMPLETED' | 'CANCELLED'
 
 export interface User {
   id: string
@@ -72,6 +76,39 @@ export interface Job {
   }
 }
 
+export interface ApplicationEvent {
+  id: string
+  applicationId: string
+  type: string
+  title: string
+  note: string | null
+  createdAt: string
+}
+
+export interface ApplicationMessage {
+  id: string
+  applicationId: string
+  senderId: string
+  content: string
+  read: boolean
+  createdAt: string
+  sender?: { id: string; name: string }
+}
+
+export interface Interview {
+  id: string
+  applicationId: string
+  scheduledAt: string
+  durationMins: number
+  mode: InterviewMode
+  location: string | null
+  notes: string | null
+  status: InterviewStatus
+  createdAt: string
+  updatedAt: string
+  application?: Application
+}
+
 export interface Application {
   id: string
   jobId: string
@@ -84,17 +121,26 @@ export interface Application {
   createdAt: string
   updatedAt: string
   job?: Job
-  /** Only present when a recruiter fetches applications */
+  interviews?: Interview[]
+  events?: ApplicationEvent[]
+  messages?: ApplicationMessage[]
+  /** Only present when a recruiter fetches applications (or on the detail page) */
   applicant?: {
     id: string
     name: string
     email: string
-    profile?: {
-      headline: string | null
-      skills: string[]
-      location: string | null
-    } | null
+    image?: string | null
+    profile?: Partial<Profile> | null
   }
+}
+
+export interface AppNotification {
+  id: string
+  title: string
+  body: string | null
+  link: string | null
+  read: boolean
+  createdAt: string
 }
 
 export interface JobFilters {

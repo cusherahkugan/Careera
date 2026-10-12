@@ -1,14 +1,6 @@
 import { z } from 'zod'
-import {
-  MAX_PHOTO_CHARS,
-  MAX_ROLES,
-  MAX_SKILLS,
-  ROLES,
-  SKILL_SET,
-} from '@/lib/constants'
+import { MAX_PHOTO_CHARS, MAX_ROLES, MAX_SKILLS, ROLES } from '@/lib/constants'
 
-// Emails are trimmed + lowercased everywhere so "Jane@X.com" and "jane@x.com"
-// are the same account at registration and at login.
 const email = z.string().trim().toLowerCase().email('Invalid email address')
 
 export const registerSchema = z
@@ -27,6 +19,11 @@ export const registerSchema = z
 export const loginSchema = z.object({
   email,
   password: z.string().min(1, 'Password is required'),
+})
+
+export const passwordChangeSchema = z.object({
+  currentPassword: z.string().min(1, 'Enter your current password'),
+  newPassword: z.string().min(6, 'New password must be at least 6 characters'),
 })
 
 const optionalUrl = z.string().url('Invalid URL').optional().or(z.literal(''))
@@ -55,11 +52,22 @@ const optionalPhoto = z
   .optional()
   .or(z.literal(''))
 
+export const experienceItemSchema = z.object({
+  title: z.string().trim().min(1, 'Each experience needs a job title').max(100),
+  company: z.string().trim().max(100).default(''),
+  duration: z.string().trim().max(60).default(''),
+  description: z.string().trim().max(1000).default(''),
+})
+
+export const educationItemSchema = z.object({
+  degree: z.string().trim().min(1, 'Each education entry needs a degree').max(100),
+  school: z.string().trim().max(100).default(''),
+  year: z.string().trim().max(20).default(''),
+})
+
 export const profileSchema = z.object({
-  // account name (stored on the User row)
   name: z.string().trim().min(2, 'Name must be at least 2 characters').optional(),
 
-  // onboarding fields
   photo: optionalPhoto,
   phone: optionalPhone,
   contactEmail: optionalEmail,
@@ -69,19 +77,18 @@ export const profileSchema = z.object({
     .max(MAX_ROLES, `Pick at most ${MAX_ROLES} roles`)
     .refine((roles) => roles.every((r) => ROLES.includes(r)), 'Unknown role selected')
     .optional(),
+  // custom skills are allowed now, the list on the form is only a set of suggestions
   skills: z
-    .array(z.string())
+    .array(z.string().trim().min(1).max(40, 'A skill name can be at most 40 characters'))
     .max(MAX_SKILLS, `Pick at most ${MAX_SKILLS} skills`)
-    .refine((skills) => skills.every((s) => SKILL_SET.has(s)), 'Unknown skill selected')
     .optional(),
 
-  // other profile fields
-  location: z.string().optional(),
-  headline: z.string().optional(),
+  location: z.string().trim().max(100).optional(),
+  headline: z.string().trim().max(150).optional(),
   bio: z.string().max(500, 'Bio must be less than 500 characters').optional(),
   resumeUrl: optionalUrl,
-  experience: z.array(z.any()).optional(),
-  education: z.array(z.any()).optional(),
+  experience: z.array(experienceItemSchema).max(20).optional(),
+  education: z.array(educationItemSchema).max(10).optional(),
   linkedIn: optionalUrl,
   github: optionalUrl,
   portfolio: optionalUrl,
@@ -106,6 +113,35 @@ export const applicationSchema = z.object({
   jobId: z.string().min(1),
   coverLetter: z.string().max(2000, 'Cover letter is too long').optional(),
   resumeUrl: z.string().url('Valid resume URL is required').optional(),
+})
+
+export const statusUpdateSchema = z.object({
+  status: z.enum(['PENDING', 'REVIEWED', 'INTERVIEW', 'ACCEPTED', 'REJECTED', 'WITHDRAWN']),
+  note: z.string().trim().max(1000).optional(),
+})
+
+export const messageSchema = z.object({
+  content: z.string().trim().min(1, 'Write a message first').max(2000, 'Message is too long'),
+})
+
+const interviewMode = z.enum(['VIDEO', 'PHONE', 'ONSITE'])
+
+export const interviewCreateSchema = z.object({
+  applicationId: z.string().min(1),
+  scheduledAt: z.coerce.date(),
+  durationMins: z.number().int().min(10).max(480).default(30),
+  mode: interviewMode.default('VIDEO'),
+  location: z.string().trim().max(300).optional(),
+  notes: z.string().trim().max(1000).optional(),
+})
+
+export const interviewUpdateSchema = z.object({
+  action: z.enum(['reschedule', 'cancel', 'complete', 'confirm', 'decline']),
+  scheduledAt: z.coerce.date().optional(),
+  durationMins: z.number().int().min(10).max(480).optional(),
+  mode: interviewMode.optional(),
+  location: z.string().trim().max(300).optional(),
+  notes: z.string().trim().max(1000).optional(),
 })
 
 export type RegisterInput = z.infer<typeof registerSchema>

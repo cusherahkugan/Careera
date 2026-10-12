@@ -16,23 +16,21 @@ export const authOptions: AuthOptions = {
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) return null
 
-        // emails are stored lowercase (see registerSchema)
         const email = credentials.email.trim().toLowerCase()
         const user = await prisma.user.findUnique({ where: { email } })
 
-        // same result for "no such user" and "wrong password" so accounts can't be probed
+        // same result for "no such user" and "wrong password"
         if (!user || !user.password) return null
 
         const isValid = await bcrypt.compare(credentials.password, user.password)
         if (!isValid) return null
 
-        // NOTE: the profile photo is NOT put in the session. It is a data URL and
-        // would blow past the cookie size limit. Read it from /api/profile instead.
         return {
           id: user.id,
           email: user.email,
           name: user.name,
           role: user.role,
+          tokenVersion: user.tokenVersion,
         }
       },
     }),
@@ -42,11 +40,26 @@ export const authOptions: AuthOptions = {
   pages: { signIn: '/login' },
   callbacks: {
     async jwt({ token, user, trigger, session }) {
-      // `user` is only present on sign-in; copy id + role into the token once
+      // sign-in: remember who this is and which "generation" of sessions it belongs to
       if (user) {
         token.id = user.id
         token.role = user.role
+        token.tv = user.tokenVersion ?? 0
+        return token
       }
+
+      // every later request: make sure the session was not revoked
+      // ("sign out everywhere" / password change bump tokenVersion).
+      // Throwing makes next-auth clear the cookie and treat the user as signed out.
+      if (token.id) {
+        const db = await prisma.user.findUnique({
+          where: { id: token.id },
+          select: { tokenVersion: true, role: true },
+        })
+        if (!db || db.tokenVersion !== token.tv) throw new Error('SESSION_REVOKED')
+        token.role = db.role
+      }
+
       // useSession().update({ name }) after the profile form changes the name
       if (trigger === 'update' && typeof session?.name === 'string' && session.name.trim()) {
         token.name = session.name.trim()

@@ -30,23 +30,40 @@ enum ApplicationStatus {
   INTERVIEW
   ACCEPTED
   REJECTED
+  WITHDRAWN
+}
+
+enum InterviewMode {
+  VIDEO
+  PHONE
+  ONSITE
+}
+
+enum InterviewStatus {
+  SCHEDULED
+  CONFIRMED
+  COMPLETED
+  CANCELLED
 }
 
 model User {
-  id            String        @id @default(cuid())
-  email         String        @unique
+  id            String         @id @default(cuid())
+  email         String         @unique
   password      String
   name          String
-  role          UserRole      @default(JOB_SEEKER)
+  role          UserRole       @default(JOB_SEEKER)
   image         String?
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  // bumped to sign the user out of every device (see lib/auth.ts)
+  tokenVersion  Int            @default(0)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
 
   profile       Profile?
   company       Company?
   jobs          Job[]
   applications  Application[]
   messages      Message[]
+  notifications Notification[]
 }
 
 model Profile {
@@ -54,8 +71,7 @@ model Profile {
   userId              String    @unique
   user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  // --- contact + identity (collected during onboarding) ---
-  photo               String?   // small JPEG data URL (resized in the browser)
+  photo               String?
   phone               String?
   contactEmail        String?
   location            String?
@@ -63,14 +79,13 @@ model Profile {
   currentDesignation  String?
   bio                 String?
 
-  // --- job preferences ---
   preferredRoles      String[]
   skills              String[]
 
-  // --- resume ---
   resumeUrl           String?
   resumeFileName      String?
-  resumeText          String?   // text extracted from the uploaded resume, used by the AI matcher
+  resumeText          String?
+  resumeFile          ResumeFile?
 
   experience          Json[]
   education           Json[]
@@ -85,11 +100,23 @@ model Profile {
   updatedAt           DateTime  @updatedAt
 }
 
+// The original uploaded file, kept apart from Profile so normal profile
+// queries never pull megabytes of bytes.
+model ResumeFile {
+  id        String   @id @default(cuid())
+  profileId String   @unique
+  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  name      String
+  mime      String
+  data      Bytes
+  createdAt DateTime @default(now())
+}
+
 model Company {
   id            String    @id @default(cuid())
   userId        String    @unique
   user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
+
   name          String
   logo          String?
   website       String?
@@ -97,9 +124,9 @@ model Company {
   size          String?
   description   String?
   location      String?
-  
+
   jobs          Job[]
-  
+
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 }
@@ -110,25 +137,25 @@ model Job {
   company         Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   recruiterId     String
   recruiter       User          @relation(fields: [recruiterId], references: [id])
-  
+
   title           String
   description     String
   requirements    String[]
   responsibilities String[]
-  
+
   type            JobType
   location        String
   salary          String?
   skills          String[]
-  
+
   isActive        Boolean       @default(true)
   views           Int           @default(0)
-  
+
   applications    Application[]
-  
+
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
-  
+
   @@index([companyId])
   @@index([recruiterId])
   @@index([isActive])
@@ -140,19 +167,21 @@ model Application {
   job           Job               @relation(fields: [jobId], references: [id], onDelete: Cascade)
   applicantId   String
   applicant     User              @relation(fields: [applicantId], references: [id], onDelete: Cascade)
-  
+
   status        ApplicationStatus @default(PENDING)
   coverLetter   String?
   resumeUrl     String?
-  
+
   aiScore       Float?
   aiNotes       String?
-  
+
   messages      Message[]
-  
+  interviews    Interview[]
+  events        ApplicationEvent[]
+
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
-  
+
   @@unique([jobId, applicantId])
   @@index([jobId])
   @@index([applicantId])
@@ -165,12 +194,57 @@ model Message {
   application     Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
   senderId        String
   sender          User        @relation(fields: [senderId], references: [id])
-  
+
   content         String
   read            Boolean     @default(false)
-  
+
   createdAt       DateTime    @default(now())
-  
+
   @@index([applicationId])
   @@index([senderId])
+}
+
+model Interview {
+  id            String          @id @default(cuid())
+  applicationId String
+  application   Application     @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  scheduledAt   DateTime
+  durationMins  Int             @default(30)
+  mode          InterviewMode   @default(VIDEO)
+  location      String?         // meeting link or address
+  notes         String?
+  status        InterviewStatus @default(SCHEDULED)
+
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([applicationId])
+  @@index([scheduledAt])
+}
+
+// Timeline shown on the application page
+model ApplicationEvent {
+  id            String      @id @default(cuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  type          String      // APPLIED | STATUS | INTERVIEW
+  title         String
+  note          String?
+  createdAt     DateTime    @default(now())
+
+  @@index([applicationId])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  body      String?
+  link      String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
 }

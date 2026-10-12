@@ -6,7 +6,9 @@ import { useRouter } from 'next/navigation'
 import axios from 'axios'
 import { useSession } from 'next-auth/react'
 import { Navbar } from '@/components/navbar'
+import { InterviewList } from '@/components/interviews'
 import { Alert } from '@/components/ui/alert'
+import { errorText } from '@/lib/client'
 import {
   applicationStatusColors,
   applicationStatusLabels,
@@ -14,14 +16,11 @@ import {
   getMatchScoreColor,
   getMatchScoreLabel,
 } from '@/lib/utils'
-import type { Application, ApplicationStatus, Job, Profile } from '@/types'
+import type { Application, ApplicationStatus, Interview, Job, Profile } from '@/types'
 
 type Recommendation = Job & { matchScore: number; matchAnalysis: string; matchedSkills?: string[] }
 
 const STATUSES: ApplicationStatus[] = ['PENDING', 'REVIEWED', 'INTERVIEW', 'ACCEPTED', 'REJECTED']
-
-const errorText = (err: unknown, fallback: string) =>
-  axios.isAxiosError(err) ? err.response?.data?.error || fallback : fallback
 
 export default function DashboardPage() {
   const router = useRouter()
@@ -30,6 +29,7 @@ export default function DashboardPage() {
 
   const [applications, setApplications] = useState<Application[]>([])
   const [myJobs, setMyJobs] = useState<Job[]>([])
+  const [interviews, setInterviews] = useState<Interview[]>([])
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
@@ -40,14 +40,21 @@ export default function DashboardPage() {
   const [recInfo, setRecInfo] = useState<{ usedAI: boolean; usedResume: boolean } | null>(null)
 
   const [updatingId, setUpdatingId] = useState<string | null>(null)
-  const [updateError, setUpdateError] = useState('')
+  const [actionError, setActionError] = useState('')
 
-  // no session -> sign-in page, and come back here afterwards
   useEffect(() => {
     if (status === 'unauthenticated') router.replace('/login?callbackUrl=/dashboard')
   }, [status, router])
 
-  // load the data that matches the account type
+  const loadInterviews = useCallback(async () => {
+    try {
+      const { data } = await axios.get('/api/interviews', { params: { upcoming: true } })
+      setInterviews(data.interviews)
+    } catch {
+      /* the rest of the dashboard still works */
+    }
+  }, [])
+
   const loadData = useCallback(async () => {
     setLoading(true)
     setLoadError('')
@@ -66,7 +73,6 @@ export default function DashboardPage() {
         ])
         const p: Profile = profileRes.data.profile
 
-        // new account (or incomplete profile): finish onboarding first
         if (!p.onboardingCompleted) {
           router.replace('/onboarding')
           return
@@ -75,9 +81,9 @@ export default function DashboardPage() {
         setProfile(p)
         setApplications(appsRes.data.applications)
       }
+      await loadInterviews()
     } catch (err) {
       if (axios.isAxiosError(err) && err.response?.status === 401) {
-        // session expired while the page was open
         router.replace('/login?callbackUrl=/dashboard')
         return
       }
@@ -85,7 +91,7 @@ export default function DashboardPage() {
     } finally {
       setLoading(false)
     }
-  }, [role, router])
+  }, [role, router, loadInterviews])
 
   useEffect(() => {
     if (status === 'authenticated' && role) loadData()
@@ -112,21 +118,43 @@ export default function DashboardPage() {
     }
   }, [router])
 
-  // recommendations load by themselves as soon as the profile is known to be complete
   useEffect(() => {
     if (role === 'JOB_SEEKER' && profile?.onboardingCompleted) loadRecommendations()
   }, [role, profile?.onboardingCompleted, loadRecommendations])
 
   const updateStatus = async (appId: string, next: ApplicationStatus) => {
-    setUpdateError('')
+    setActionError('')
     setUpdatingId(appId)
     try {
       await axios.patch(`/api/applications/${appId}`, { status: next })
       setApplications((prev) => prev.map((a) => (a.id === appId ? { ...a, status: next } : a)))
+      loadInterviews()
     } catch (err) {
-      setUpdateError(errorText(err, 'Could not update the status'))
+      setActionError(errorText(err, 'Could not update the status'))
     } finally {
       setUpdatingId(null)
+    }
+  }
+
+  const toggleJob = async (job: Job) => {
+    setActionError('')
+    try {
+      await axios.put(`/api/jobs/${job.id}`, { isActive: !job.isActive })
+      setMyJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, isActive: !job.isActive } : j)))
+    } catch (err) {
+      setActionError(errorText(err, 'Could not update the job'))
+    }
+  }
+
+  const deleteJob = async (job: Job) => {
+    if (!window.confirm(`Delete "${job.title}" and all its applications? This cannot be undone.`)) return
+    setActionError('')
+    try {
+      await axios.delete(`/api/jobs/${job.id}`)
+      setMyJobs((prev) => prev.filter((j) => j.id !== job.id))
+      setApplications((prev) => prev.filter((a) => a.jobId !== job.id))
+    } catch (err) {
+      setActionError(errorText(err, 'Could not delete the job'))
     }
   }
 
@@ -136,10 +164,12 @@ export default function DashboardPage() {
 
   const isRecruiter = role === 'RECRUITER'
 
-  // job seekers: wait for the profile check so incomplete accounts never see an empty dashboard
   if (!isRecruiter && !profile && !loadError) {
     return <div className="min-h-screen bg-white p-8 text-zinc-500">Loading…</div>
   }
+
+  const activeJobs = myJobs.filter((j) => j.isActive).length
+  const h2 = 'font-serif text-xl font-bold text-zinc-900'
 
   return (
     <div className="min-h-screen bg-white">
@@ -165,7 +195,7 @@ export default function DashboardPage() {
               {!isRecruiter && (
                 <>
                   {' · '}
-                  <Link href="/onboarding" className="text-red-600 hover:text-red-700">
+                  <Link href="/profile" className="text-red-600 hover:text-red-700">
                     Edit profile
                   </Link>
                 </>
@@ -182,11 +212,38 @@ export default function DashboardPage() {
             </button>
           </Alert>
         )}
+        {actionError && <Alert variant="error" className="mb-6">{actionError}</Alert>}
+
+        {/* upcoming interviews: same block for both roles */}
+        {interviews.length > 0 && (
+          <section className="mb-12">
+            <h2 className={`mb-4 ${h2}`}>Upcoming interviews</h2>
+            <InterviewList
+              interviews={interviews}
+              role={isRecruiter ? 'RECRUITER' : 'JOB_SEEKER'}
+              onChanged={() => {
+                loadInterviews()
+              }}
+              showContext
+            />
+          </section>
+        )}
 
         {isRecruiter ? (
           <>
             <section className="mb-12">
-              <h2 className="mb-4 font-serif text-xl font-bold text-zinc-900">Your job postings</h2>
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className={h2}>Your job postings</h2>
+                <Link
+                  href="/dashboard/jobs/new"
+                  className="rounded bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
+                >
+                  Post a job
+                </Link>
+              </div>
+              <p className="mb-4 text-sm text-zinc-500">
+                {myJobs.length} postings · {activeJobs} open · {applications.length} applicants in total
+              </p>
               {loading ? (
                 <p className="text-zinc-500">Loading…</p>
               ) : myJobs.length === 0 ? (
@@ -194,7 +251,7 @@ export default function DashboardPage() {
               ) : (
                 <div className="divide-y divide-zinc-200 border-y border-zinc-200">
                   {myJobs.map((job) => (
-                    <div key={job.id} className="flex items-center justify-between py-4">
+                    <div key={job.id} className="flex flex-wrap items-center justify-between gap-3 py-4">
                       <div>
                         <p className="font-medium text-zinc-900">{job.title}</p>
                         <p className="text-sm text-zinc-500">
@@ -202,9 +259,23 @@ export default function DashboardPage() {
                           {!job.isActive && ' · Closed'}
                         </p>
                       </div>
-                      <span className="rounded border border-red-200 bg-red-50 px-3 py-1 text-sm text-red-700">
-                        {job._count?.applications ?? 0} applicants
-                      </span>
+                      <div className="flex flex-wrap items-center gap-3 text-sm">
+                        <Link
+                          href={`/dashboard/applicants?jobId=${job.id}`}
+                          className="rounded border border-red-200 bg-red-50 px-3 py-1 text-red-700"
+                        >
+                          {job._count?.applications ?? 0} applicants
+                        </Link>
+                        <Link href={`/dashboard/jobs/${job.id}/edit`} className="text-zinc-600 hover:text-red-600">
+                          Edit
+                        </Link>
+                        <button onClick={() => toggleJob(job)} className="text-zinc-600 hover:text-red-600">
+                          {job.isActive ? 'Close' : 'Reopen'}
+                        </button>
+                        <button onClick={() => deleteJob(job)} className="text-zinc-400 hover:text-red-600">
+                          Delete
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -212,30 +283,32 @@ export default function DashboardPage() {
             </section>
 
             <section>
-              <h2 className="mb-4 font-serif text-xl font-bold text-zinc-900">Applicants</h2>
-              {updateError && <Alert variant="error" className="mb-4">{updateError}</Alert>}
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className={h2}>Latest applicants</h2>
+                <Link href="/dashboard/applicants" className="text-sm font-medium text-red-600 hover:text-red-700">
+                  See all →
+                </Link>
+              </div>
               {loading ? (
                 <p className="text-zinc-500">Loading…</p>
               ) : applications.length === 0 ? (
                 <p className="text-zinc-500">No one has applied to your jobs yet.</p>
               ) : (
                 <div className="divide-y divide-zinc-200 border-y border-zinc-200">
-                  {applications.map((app) => (
+                  {applications.slice(0, 8).map((app) => (
                     <div key={app.id} className="py-4">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
-                          <p className="font-medium text-zinc-900">
-                            {app.applicant?.name}{' '}
-                            <span className="text-sm font-normal text-zinc-500">
-                              · {app.applicant?.email}
-                            </span>
-                          </p>
+                          <Link
+                            href={`/applications/${app.id}`}
+                            className="font-medium text-zinc-900 hover:text-red-600"
+                          >
+                            {app.applicant?.name}
+                          </Link>{' '}
+                          <span className="text-sm text-zinc-500">· {app.applicant?.email}</span>
                           <p className="text-sm text-zinc-500">
                             {app.job?.title} · Applied {formatDate(app.createdAt)}
                           </p>
-                          {app.applicant?.profile?.headline && (
-                            <p className="text-sm text-zinc-500">{app.applicant.profile.headline}</p>
-                          )}
                         </div>
                         <div className="flex items-center gap-3">
                           {app.aiScore !== null && (
@@ -243,22 +316,25 @@ export default function DashboardPage() {
                               {Math.round(app.aiScore)}%
                             </span>
                           )}
-                          <select
-                            aria-label="Application status"
-                            value={app.status}
-                            disabled={updatingId === app.id}
-                            onChange={(e) => updateStatus(app.id, e.target.value as ApplicationStatus)}
-                            className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-800 focus:border-red-600 focus:outline-none disabled:opacity-50"
-                          >
-                            {STATUSES.map((s) => (
-                              <option key={s} value={s}>
-                                {applicationStatusLabels[s]}
-                              </option>
-                            ))}
-                          </select>
+                          {app.status === 'WITHDRAWN' ? (
+                            <span className="text-sm text-zinc-500">Withdrawn</span>
+                          ) : (
+                            <select
+                              aria-label="Application status"
+                              value={app.status}
+                              disabled={updatingId === app.id}
+                              onChange={(e) => updateStatus(app.id, e.target.value as ApplicationStatus)}
+                              className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-800 focus:border-red-600 focus:outline-none disabled:opacity-50"
+                            >
+                              {STATUSES.map((s) => (
+                                <option key={s} value={s}>
+                                  {applicationStatusLabels[s]}
+                                </option>
+                              ))}
+                            </select>
+                          )}
                         </div>
                       </div>
-                      {app.aiNotes && <p className="mt-1 text-sm text-zinc-500">{app.aiNotes}</p>}
                     </div>
                   ))}
                 </div>
@@ -269,7 +345,7 @@ export default function DashboardPage() {
           <>
             <section className="mb-12">
               <div className="mb-1 flex items-center justify-between">
-                <h2 className="font-serif text-xl font-bold text-zinc-900">Recommended for you</h2>
+                <h2 className={h2}>Recommended for you</h2>
                 <button
                   onClick={loadRecommendations}
                   disabled={recLoading}
@@ -284,7 +360,7 @@ export default function DashboardPage() {
                 {!profile?.hasResume && (
                   <>
                     {' '}
-                    <Link href="/onboarding" className="text-red-600 hover:text-red-700">
+                    <Link href="/profile" className="text-red-600 hover:text-red-700">
                       Upload your resume
                     </Link>{' '}
                     for sharper matches.
@@ -301,7 +377,9 @@ export default function DashboardPage() {
                   <div key={job.id} className="py-4">
                     <div className="flex items-center justify-between gap-4">
                       <p className="font-medium text-zinc-900">
-                        {job.title}{' '}
+                        <Link href={`/jobs/${job.id}`} className="hover:text-red-600">
+                          {job.title}
+                        </Link>{' '}
                         <span className="text-sm font-normal text-zinc-500">· {job.company?.name}</span>
                       </p>
                       <span
@@ -327,7 +405,7 @@ export default function DashboardPage() {
 
             <section>
               <div className="mb-4 flex items-center justify-between">
-                <h2 className="font-serif text-xl font-bold text-zinc-900">My applications</h2>
+                <h2 className={h2}>My applications</h2>
                 <Link href="/jobs" className="text-sm font-medium text-red-600 hover:text-red-700">
                   Browse jobs →
                 </Link>
@@ -339,7 +417,11 @@ export default function DashboardPage() {
               ) : (
                 <div className="divide-y divide-zinc-200 border-y border-zinc-200">
                   {applications.map((app) => (
-                    <div key={app.id} className="flex items-center justify-between py-4">
+                    <Link
+                      key={app.id}
+                      href={`/applications/${app.id}`}
+                      className="flex items-center justify-between py-4 hover:bg-zinc-50"
+                    >
                       <div>
                         <p className="font-medium text-zinc-900">{app.job?.title}</p>
                         <p className="text-sm text-zinc-500">
@@ -351,7 +433,7 @@ export default function DashboardPage() {
                       >
                         {applicationStatusLabels[app.status]}
                       </span>
-                    </div>
+                    </Link>
                   ))}
                 </div>
               )}

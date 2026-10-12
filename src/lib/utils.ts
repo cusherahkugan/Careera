@@ -10,6 +10,23 @@ export function formatDate(date: Date | string): string {
   return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
+export function formatDateTime(date: Date | string): string {
+  return new Date(date).toLocaleString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+/** ISO string -> value for <input type="datetime-local"> in the browser's timezone */
+export function toLocalInput(date: Date | string): string {
+  const d = new Date(date)
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16)
+}
+
 export function formatRelativeTime(date: Date | string): string {
   const d = new Date(date)
   const now = new Date()
@@ -56,14 +73,30 @@ export const applicationStatusColors: Record<string, string> = {
   INTERVIEW: 'bg-red-50 text-red-700 border-red-200',
   ACCEPTED: 'bg-green-50 text-green-700 border-green-200',
   REJECTED: 'bg-zinc-100 text-zinc-500 border-zinc-200',
+  WITHDRAWN: 'bg-zinc-100 text-zinc-500 border-zinc-200',
 }
 
 export const applicationStatusLabels: Record<string, string> = {
   PENDING: 'Pending review',
   REVIEWED: 'Under review',
-  INTERVIEW: 'Interview scheduled',
+  INTERVIEW: 'Interview stage',
   ACCEPTED: 'Accepted',
   REJECTED: 'Not selected',
+  WITHDRAWN: 'Withdrawn',
+}
+
+export const interviewStatusColors: Record<string, string> = {
+  SCHEDULED: 'bg-zinc-50 text-zinc-700 border-zinc-300',
+  CONFIRMED: 'bg-green-50 text-green-700 border-green-200',
+  COMPLETED: 'bg-zinc-100 text-zinc-600 border-zinc-300',
+  CANCELLED: 'bg-red-50 text-red-700 border-red-200',
+}
+
+export const interviewStatusLabels: Record<string, string> = {
+  SCHEDULED: 'Awaiting confirmation',
+  CONFIRMED: 'Confirmed',
+  COMPLETED: 'Completed',
+  CANCELLED: 'Cancelled',
 }
 
 export function getMatchScoreColor(score: number): string {
