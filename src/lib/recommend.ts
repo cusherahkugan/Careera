@@ -26,6 +26,40 @@ export interface LocalMatch {
 
 const STOP_WORDS = new Set(['senior', 'junior', 'lead', 'the', 'and', 'for', 'engineer', 'developer'])
 
+const ALIASES: Record<string, string> = {
+  postgres: 'postgresql',
+  k8s: 'kubernetes',
+  golang: 'go',
+  tailwindcss: 'tailwind',
+  restapis: 'rest',
+  restapi: 'rest',
+  restful: 'rest',
+  uiux: 'uiuxdesign',
+  gcp: 'googlecloud',
+  mongo: 'mongodb',
+  cicd: 'cicd',
+  continuousintegration: 'cicd',
+}
+
+/** "Node.js" / "NodeJS" / "node js" -> "node"; "Tailwind CSS" -> "tailwind" */
+function canon(skill: string): string {
+  let s = skill.toLowerCase().replace(/[^a-z0-9+#]/g, '')
+  if (s.length > 4 && s.endsWith('js')) s = s.slice(0, -2)
+  return ALIASES[s] ?? s
+}
+
+function escapeRegex(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+}
+
+/** Whole-word match, so "Go" does not match "google" and "Java" does not match "JavaScript". */
+function mentions(text: string, term: string): boolean {
+  if (!text || !term) return false
+  const caseSensitive = /^[A-Za-z]{1,3}$/.test(term) // "Go", "C", "R"
+  const re = new RegExp(`(?<![A-Za-z0-9+#])${escapeRegex(term)}(?![A-Za-z0-9+#])`, caseSensitive ? '' : 'i')
+  return re.test(text)
+}
+
 function tokens(s: string): string[] {
   return s
     .toLowerCase()
@@ -34,18 +68,17 @@ function tokens(s: string): string[] {
 }
 
 export function localMatch(candidate: CandidateProfile, job: JobForMatching): LocalMatch {
-  const mySkills = new Set(candidate.skills.map((s) => s.toLowerCase()))
-  const resume = (candidate.resumeText ?? '').toLowerCase()
+  const mySkills = new Set(candidate.skills.map(canon))
+  const resume = candidate.resumeText ?? ''
 
   // 1) skills: full credit if listed on the profile, partial if only the resume mentions it
   const matchedSkills: string[] = []
   let skillPoints = 0
   for (const skill of job.skills) {
-    const key = skill.toLowerCase()
-    if (mySkills.has(key)) {
+    if (mySkills.has(canon(skill))) {
       matchedSkills.push(skill)
       skillPoints += 1
-    } else if (resume && resume.includes(key)) {
+    } else if (resume && mentions(resume, skill)) {
       matchedSkills.push(skill)
       skillPoints += 0.6
     }
@@ -55,16 +88,16 @@ export function localMatch(candidate: CandidateProfile, job: JobForMatching): Lo
   // 2) role: does the title look like something the person wants / does today?
   const title = job.title.toLowerCase()
   const wanted = [...candidate.preferredRoles, candidate.currentDesignation ?? ''].filter(Boolean)
+  const titleTokens = new Set(tokens(job.title))
   let roleScore = 0
   let roleMatch = false
   for (const role of wanted) {
     const r = role.toLowerCase()
-    if (title.includes(r) || r.includes(title)) {
+    if (title.includes(r) || (title.length > 4 && r.includes(title))) {
       roleScore = 1
       roleMatch = true
       break
     }
-    const titleTokens = new Set(tokens(job.title))
     const roleTokens = tokens(role)
     if (roleTokens.length > 0) {
       const overlap = roleTokens.filter((t) => titleTokens.has(t)).length / roleTokens.length
@@ -74,8 +107,8 @@ export function localMatch(candidate: CandidateProfile, job: JobForMatching): Lo
   if (roleScore >= 0.5) roleMatch = true
 
   // 3) breadth: how many of the person's skills show up in the job text at all
-  const jobText = `${job.description} ${job.requirements.join(' ')}`.toLowerCase()
-  const mentioned = candidate.skills.filter((s) => jobText.includes(s.toLowerCase())).length
+  const jobText = `${job.description} ${job.requirements.join(' ')}`
+  const mentioned = candidate.skills.filter((s) => mentions(jobText, s)).length
   const breadth = Math.min(mentioned / Math.max(Math.min(candidate.skills.length, 8), 1), 1)
 
   const score = Math.round(100 * (0.6 * skillScore + 0.3 * roleScore + 0.1 * breadth))

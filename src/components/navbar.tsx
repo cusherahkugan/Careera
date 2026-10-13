@@ -124,6 +124,9 @@ export function Navbar() {
                   <Link href="/dashboard/jobs/new" className="text-zinc-600 hover:text-red-600">
                     Post a job
                   </Link>
+                  <Link href="/company" className="text-zinc-600 hover:text-red-600">
+                    Company
+                  </Link>
                 </>
               )}
               {role === 'JOB_SEEKER' && (

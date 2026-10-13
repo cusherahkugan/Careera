@@ -4,7 +4,8 @@ import { Prisma, ApplicationStatus } from '@prisma/client'
 import { z } from 'zod'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { calculateJobMatch } from '@/lib/ai'
+import { rankJobsWithAI } from '@/lib/ai'
+import { describeLocalMatch, localMatch, type CandidateProfile } from '@/lib/recommend'
 import { logEvent, notify } from '@/lib/notify'
 import { applicationSchema } from '@/lib/validations'
 
@@ -61,7 +62,12 @@ export async function GET(req: Request) {
       orderBy: { createdAt: 'desc' },
     })
 
-    return NextResponse.json({ applications })
+    // match scores are for recruiters only
+    const safe = isRecruiter
+      ? applications
+      : applications.map((a) => ({ ...a, aiScore: null, aiNotes: null }))
+
+    return NextResponse.json({ applications: safe })
   } catch (error) {
     console.error('Applications fetch error:', error)
     return NextResponse.json({ error: 'Failed to fetch applications' }, { status: 500 })
@@ -106,19 +112,29 @@ export async function POST(req: Request) {
       )
     }
 
-    // Match scoring is a nice extra. It must never block or break applying.
-    let aiScore: number | null = null
-    let aiNotes: string | null = null
+    // Match scoring: local score always works; AI refines it when available.
+    // It must never block or break applying.
+    const candidate: CandidateProfile = {
+      skills: profile.skills,
+      preferredRoles: profile.preferredRoles,
+      currentDesignation: profile.currentDesignation,
+      headline: profile.headline,
+      resumeText: profile.resumeText,
+      experienceCount: profile.experience.length,
+    }
+    const local = localMatch(candidate, job)
+    let aiScore: number = local.score
+    let aiNotes: string = describeLocalMatch(job, local)
 
     try {
-      const match = await withTimeout(
-        calculateJobMatch(profile.skills, profile.experience as unknown[], job.skills, job.requirements),
-        SCORING_TIMEOUT_MS
-      )
-      aiScore = match.score
-      aiNotes = match.analysis
+      const ranked = await withTimeout(rankJobsWithAI(candidate, [job]), SCORING_TIMEOUT_MS)
+      const result = ranked?.[job.id]
+      if (result) {
+        aiScore = Math.round(0.7 * result.score + 0.3 * local.score)
+        aiNotes = result.analysis || aiNotes
+      }
     } catch (error) {
-      console.error('Match scoring skipped:', error)
+      console.error('AI match scoring skipped:', error)
     }
 
     try {
@@ -139,9 +155,7 @@ export async function POST(req: Request) {
       await Promise.all([
         notify(job.recruiterId, {
           title: `New application: ${job.title}`,
-          body: `${session.user.name ?? 'A candidate'} applied for ${job.title}.${
-            aiScore !== null ? ` Match score: ${Math.round(aiScore)}%.` : ''
-          }`,
+          body: `${session.user.name ?? 'A candidate'} applied for ${job.title}. Match score: ${Math.round(aiScore)}%.`,
           link,
         }),
         notify(session.user.id, {

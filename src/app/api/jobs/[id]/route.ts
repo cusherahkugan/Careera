@@ -36,10 +36,14 @@ export async function GET(_req: Request, context: RouteParams) {
       return NextResponse.json({ error: 'Job not found' }, { status: 404 })
     }
 
-    await prisma.job.update({
-      where: { id },
-      data: { views: { increment: 1 } },
-    })
+    // views count candidates, not the recruiter opening their own posting / edit page
+    const session = await getServerSession(authOptions)
+    if (session?.user?.id !== job.recruiterId) {
+      await prisma.job.update({
+        where: { id },
+        data: { views: { increment: 1 } },
+      })
+    }
 
     return NextResponse.json({ job })
   } catch (error) {
@@ -76,7 +80,7 @@ export async function PUT(req: Request, context: RouteParams) {
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json(
-        { error: 'Invalid input', details: error.errors },
+        { error: error.errors[0]?.message ?? 'Invalid input', details: error.errors },
         { status: 400 }
       )
     }

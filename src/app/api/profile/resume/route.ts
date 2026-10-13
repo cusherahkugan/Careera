@@ -4,7 +4,13 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { MAX_RESUME_BYTES } from '@/lib/constants'
 import { parseResume } from '@/lib/ai'
-import { detectContact, detectSkills, extractResumeText } from '@/lib/resume'
+import {
+  detectAllSkills,
+  detectContact,
+  extractResumeText,
+  normalizeParsed,
+  parseResumeLocal,
+} from '@/lib/resume'
 
 export const runtime = 'nodejs'
 
@@ -16,8 +22,9 @@ const MIME: Record<string, string> = {
 }
 
 // POST /api/profile/resume  (multipart form, field name: "resume")
-// Stores the file + its text, detects skills/contact, and (when an OpenAI key
-// exists) parses experience/education so the form can pre-fill them.
+// Stores the file + its text, detects skills/contact and parses experience /
+// education. Works without an OpenAI key (local parser); with a key the AI
+// result is used first and the local parser fills any gaps.
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions)
@@ -80,18 +87,29 @@ export async function POST(req: Request) {
     const contact = detectContact(text)
 
     // optional AI parsing - never blocks the upload for long
-    const parsed = await Promise.race([
+    const aiRaw = await Promise.race([
       parseResume(text.slice(0, 12000)),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 12000)),
     ])
+    const ai = normalizeParsed(aiRaw)
+    const local = parseResumeLocal(text)
+
+    const parsed = {
+      headline: ai?.headline || local.headline,
+      location: ai?.location || local.location,
+      summary: ai?.summary || local.summary,
+      experience: ai?.experience.length ? ai.experience : local.experience,
+      education: ai?.education.length ? ai.education : local.education,
+    }
 
     return NextResponse.json({
       fileName: file.name,
       characters: text.length,
-      detectedSkills: detectSkills(text),
+      detectedSkills: detectAllSkills(text),
       detectedEmail: contact.email ?? null,
       detectedPhone: contact.phone ?? null,
       parsed,
+      parsedBy: ai ? 'ai' : 'local',
     })
   } catch (error) {
     console.error('Resume upload error:', error)

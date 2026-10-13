@@ -6,7 +6,7 @@ const prisma = new PrismaClient()
 async function main() {
   console.log('🌱 Starting database seed...')
 
-   await prisma.notification.deleteMany()
+  await prisma.notification.deleteMany()
   await prisma.interview.deleteMany()
   await prisma.applicationEvent.deleteMany()
   await prisma.message.deleteMany()
@@ -19,53 +19,44 @@ async function main() {
 
   console.log('✨ Cleared existing data')
 
- const jobSeeker = await prisma.user.create({
-  data: {
-    email: 'seeker@example.com',
-    password: await bcrypt.hash('password123', 10),
-    name: 'Alex Johnson',
-    role: 'JOB_SEEKER',
-    profile: {
-      create: {
-        phone: '+1234567890',
-        onboardingCompleted: true,
-        contactEmail: 'seeker@example.com',
-        currentDesignation: 'Senior Software Engineer at Tech Corp',
-        preferredRoles: ['Full Stack Developer', 'Software Engineer'],
-        location: 'San Francisco, CA',
-        headline: 'Full Stack Developer',
-        bio: 'Passionate software engineer with 5 years of experience building scalable web applications.',
-        resumeUrl: 'https://example.com/resume.pdf',
-        skills: ['JavaScript', 'TypeScript', 'React', 'Node.js', 'PostgreSQL', 'AWS', 'Docker', 'Git'],
-        experience: [
-          {
-            title: 'Senior Software Engineer',
-            company: 'Tech Corp',
-            duration: '2021 - Present',
-            description: 'Led development of microservices architecture...'
-          }
-        ],
-        education: [
-          {
-            degree: 'BS Computer Science',
-            school: 'University of California',
-            year: '2019'
-          }
-        ],
-        linkedIn: 'https://linkedin.com/in/alexjohnson',
-        github: 'https://github.com/alexjohnson'
-      }
-    }
-  },
-  include: {
-    profile: true
-  }
-})
-
+  const jobSeeker = await prisma.user.create({
+    data: {
+      email: 'seeker@example.com',
+      password: await bcrypt.hash('password123', 10),
+      name: 'Alex Johnson',
+      role: 'JOB_SEEKER',
+      profile: {
+        create: {
+          phone: '+1234567890',
+          onboardingCompleted: true,
+          contactEmail: 'seeker@example.com',
+          currentDesignation: 'Senior Software Engineer at Tech Corp',
+          preferredRoles: ['Full Stack Developer', 'Software Engineer'],
+          location: 'San Francisco, CA',
+          headline: 'Full Stack Developer',
+          bio: 'Passionate software engineer with 5 years of experience building scalable web applications.',
+          skills: ['JavaScript', 'TypeScript', 'React', 'Node.js', 'PostgreSQL', 'AWS', 'Docker', 'Git'],
+          experience: [
+            {
+              title: 'Senior Software Engineer',
+              company: 'Tech Corp',
+              duration: '2021 - Present',
+              description: 'Led development of a microservices architecture.',
+            },
+          ],
+          education: [
+            { degree: 'BS Computer Science', school: 'University of California', year: '2019' },
+          ],
+          linkedIn: 'https://linkedin.com/in/alexjohnson',
+          github: 'https://github.com/alexjohnson',
+        },
+      },
+    },
+    include: { profile: true },
+  })
 
   console.log('👤 Created job seeker:', jobSeeker.email)
 
-  // Create Recruiter & Company
   const recruiter = await prisma.user.create({
     data: {
       email: 'recruiter@example.com',
@@ -77,28 +68,29 @@ async function main() {
           name: 'InnovateTech Solutions',
           industry: 'Technology',
           size: '50-200',
-          description: 'Leading software company building next-generation AI solutions. We empower businesses with cutting-edge technology and innovative products.',
+          description:
+            'Leading software company building next-generation AI solutions. We empower businesses with cutting-edge technology and innovative products.',
           location: 'San Francisco, CA',
           website: 'https://innovatetech.example.com',
-        }
-      }
+        },
+      },
     },
-    include: {
-      company: true
-    }
+    include: { company: true },
   })
 
   console.log('👤 Created recruiter:', recruiter.email)
   console.log('🏢 Created company:', recruiter.company?.name)
 
-  // Create Jobs
+  const companyId = recruiter.company!.id
+
   const jobs = await prisma.job.createMany({
     data: [
       {
-        companyId: recruiter.company!.id,
+        companyId,
         recruiterId: recruiter.id,
         title: 'Senior Full Stack Engineer',
-        description: 'We are seeking an experienced Full Stack Engineer to join our growing team. You will work on cutting-edge projects using modern technologies and collaborate with cross-functional teams to deliver high-quality software solutions. This role offers the opportunity to make a significant impact on our product architecture and technical direction.',
+        description:
+          'We are seeking an experienced Full Stack Engineer to join our growing team. You will work on cutting-edge projects using modern technologies and collaborate with cross-functional teams to deliver high-quality software solutions. This role offers the opportunity to make a significant impact on our product architecture and technical direction.',
         requirements: [
           '5+ years of professional software development experience',
           'Strong proficiency in JavaScript/TypeScript and React',
@@ -113,7 +105,6 @@ async function main() {
           'Collaborate with product and design teams',
           'Write clean, maintainable, and testable code',
           'Mentor junior developers and conduct code reviews',
-          'Participate in technical discussions and architecture decisions',
         ],
         type: 'FULL_TIME',
         location: 'San Francisco, CA (Hybrid)',
@@ -121,10 +112,11 @@ async function main() {
         skills: ['JavaScript', 'TypeScript', 'React', 'Node.js', 'PostgreSQL', 'AWS'],
       },
       {
-        companyId: recruiter.company!.id,
+        companyId,
         recruiterId: recruiter.id,
         title: 'Frontend Developer',
-        description: 'Join our frontend team to create beautiful, performant web applications. Work with the latest React technologies and modern UI frameworks to build exceptional user experiences.',
+        description:
+          'Join our frontend team to create beautiful, performant web applications. Work with the latest React technologies and modern UI frameworks to build exceptional user experiences.',
         requirements: [
           '3+ years of frontend development experience',
           'Expert knowledge of React and modern JavaScript',
@@ -136,19 +128,19 @@ async function main() {
           'Build reusable component libraries',
           'Implement pixel-perfect designs',
           'Optimize application performance',
-          'Write clean, maintainable code',
           'Collaborate with designers and backend engineers',
         ],
-        type: 'FULL_TIME',
+        type: 'REMOTE',
         location: 'Remote',
         salary: '$100,000 - $140,000',
-        skills: ['React', 'JavaScript', 'CSS', 'Tailwind', 'Next.js'],
+        skills: ['React', 'JavaScript', 'CSS', 'Tailwind CSS', 'Next.js'],
       },
       {
-        companyId: recruiter.company!.id,
+        companyId,
         recruiterId: recruiter.id,
         title: 'DevOps Engineer',
-        description: 'Help us build and maintain robust infrastructure for our applications. Automate deployments, monitor systems, and ensure reliability at scale.',
+        description:
+          'Help us build and maintain robust infrastructure for our applications. Automate deployments, monitor systems, and ensure reliability at scale.',
         requirements: [
           '4+ years of DevOps experience',
           'Strong knowledge of AWS or GCP',
@@ -160,7 +152,6 @@ async function main() {
           'Manage cloud infrastructure and resources',
           'Build and maintain CI/CD pipelines',
           'Monitor system performance and reliability',
-          'Implement security best practices',
           'Automate operational tasks',
         ],
         type: 'FULL_TIME',
@@ -169,69 +160,66 @@ async function main() {
         skills: ['AWS', 'Docker', 'Kubernetes', 'Terraform', 'CI/CD'],
       },
       {
-        companyId: recruiter.company!.id,
+        companyId,
         recruiterId: recruiter.id,
         title: 'Product Designer',
-        description: 'Shape the future of our products through exceptional design. Create intuitive, delightful experiences that users love.',
+        description:
+          'Shape the future of our products through exceptional design. Create intuitive, delightful experiences that users love.',
         requirements: [
           '3+ years of product design experience',
           'Strong portfolio demonstrating UI/UX work',
           'Proficiency in Figma or similar design tools',
-          'Understanding of user-centered design principles',
           'Experience with design systems',
         ],
         responsibilities: [
           'Design user interfaces for web and mobile',
           'Create and maintain design systems',
           'Conduct user research and testing',
-          'Collaborate with engineers on implementation',
           'Present designs to stakeholders',
         ],
         type: 'FULL_TIME',
         location: 'San Francisco, CA (Hybrid)',
         salary: '$110,000 - $150,000',
-        skills: ['Figma', 'UI/UX', 'Design Systems', 'Prototyping'],
+        skills: ['Figma', 'UI/UX Design', 'Design Systems', 'Prototyping'],
       },
       {
-        companyId: recruiter.company!.id,
+        companyId,
         recruiterId: recruiter.id,
         title: 'Data Scientist Intern',
-        description: 'Learn and grow with our data science team. Work on real projects involving machine learning and data analysis.',
+        description:
+          'Learn and grow with our data science team. Work on real projects involving machine learning and data analysis.',
         requirements: [
-          'Currently pursuing degree in Computer Science, Statistics, or related field',
+          'Currently pursuing a degree in Computer Science, Statistics, or a related field',
           'Knowledge of Python and data analysis libraries',
           'Understanding of machine learning concepts',
-          'Strong analytical and problem-solving skills',
         ],
         responsibilities: [
           'Assist in data analysis projects',
           'Build and train machine learning models',
           'Create data visualizations',
-          'Collaborate with senior data scientists',
         ],
         type: 'INTERNSHIP',
         location: 'Remote',
         salary: '$25 - $35/hour',
         skills: ['Python', 'Machine Learning', 'Data Analysis', 'SQL'],
       },
-    ]
+    ],
   })
 
   console.log('💼 Created', jobs.count, 'jobs')
 
-  // Create sample application
-  const jobList = await prisma.job.findMany()
-  
-  if (jobList.length > 0) {
-        const application = await prisma.application.create({
+  const firstJob = await prisma.job.findFirst({ orderBy: { createdAt: 'asc' } })
+
+  if (firstJob) {
+    const application = await prisma.application.create({
       data: {
-        jobId: jobList[0].id,
+        jobId: firstJob.id,
         applicantId: jobSeeker.id,
-        coverLetter: 'I am excited to apply for this position. My experience with React and Node.js aligns perfectly with your requirements.',
-        resumeUrl: jobSeeker.profile?.resumeUrl,
+        coverLetter:
+          'I am excited to apply for this position. My experience with React and Node.js aligns perfectly with your requirements.',
         status: 'INTERVIEW',
         aiScore: 85.5,
-        aiNotes: 'Strong technical match with 6/6 required skills. Relevant experience in similar role.',
+        aiNotes: 'Matches 6 of 6 required skills and fits a role you are looking for.',
         events: {
           create: [
             { type: 'APPLIED', title: 'Application submitted' },
@@ -262,6 +250,7 @@ async function main() {
     })
 
     console.log('📝 Created sample application with an interview')
+  }
 
   console.log('✅ Database seeded successfully!')
   console.log('\n📧 Test Accounts:')

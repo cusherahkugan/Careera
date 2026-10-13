@@ -9,7 +9,11 @@ export default withAuth(
     const path = req.nextUrl.pathname
 
     // recruiter-only pages
-    if (path.startsWith('/dashboard/jobs') || path.startsWith('/dashboard/applicants')) {
+    if (
+      path.startsWith('/dashboard/jobs') ||
+      path.startsWith('/dashboard/applicants') ||
+      path.startsWith('/company')
+    ) {
       if (token?.role !== 'RECRUITER') {
         return NextResponse.redirect(new URL('/dashboard', req.url))
       }
@@ -39,5 +43,6 @@ export const config = {
     '/profile/:path*',
     '/settings/:path*',
     '/applications/:path*',
+    '/company/:path*',
   ],
 }

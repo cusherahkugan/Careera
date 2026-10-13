@@ -2,15 +2,28 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import axios from 'axios'
 import { useSession } from 'next-auth/react'
 import { Navbar } from '@/components/navbar'
 import { Alert } from '@/components/ui/alert'
 import { formatRelativeTime, formatSalary, jobTypeColors } from '@/lib/utils'
 import type { Job } from '@/types'
-import Link from 'next/link'
 
 type Notice = { type: 'error' | 'success'; text: string }
+type Filters = { search: string; type: string; location: string }
+
+const TYPES = [
+  { value: '', label: 'All types' },
+  { value: 'FULL_TIME', label: 'Full time' },
+  { value: 'PART_TIME', label: 'Part time' },
+  { value: 'CONTRACT', label: 'Contract' },
+  { value: 'INTERNSHIP', label: 'Internship' },
+  { value: 'REMOTE', label: 'Remote' },
+]
+
+const fieldCls =
+  'rounded border border-zinc-300 bg-white px-4 py-3 text-zinc-900 placeholder-zinc-400 focus:border-red-600 focus:outline-none focus:ring-1 focus:ring-red-600'
 
 export default function JobsPage() {
   const router = useRouter()
@@ -18,19 +31,33 @@ export default function JobsPage() {
   const role = session?.user.role
 
   const [jobs, setJobs] = useState<Job[]>([])
-  const [search, setSearch] = useState('')
+  const [filters, setFilters] = useState<Filters>({ search: '', type: '', location: '' })
+  const [page, setPage] = useState(1)
+  const [pages, setPages] = useState(1)
+  const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [applied, setApplied] = useState<Set<string>>(new Set())
   const [applyingId, setApplyingId] = useState<string | null>(null)
   const [notices, setNotices] = useState<Record<string, Notice>>({})
 
-  const loadJobs = useCallback(async (query: string) => {
+  const loadJobs = useCallback(async (f: Filters, p: number) => {
     setLoading(true)
     setLoadError('')
     try {
-      const { data } = await axios.get('/api/jobs', { params: { search: query || undefined } })
+      const { data } = await axios.get('/api/jobs', {
+        params: {
+          search: f.search || undefined,
+          type: f.type || undefined,
+          location: f.location || undefined,
+          page: p,
+          limit: 10,
+        },
+      })
       setJobs(data.jobs)
+      setPage(p)
+      setPages(data.pagination.pages || 1)
+      setTotal(data.pagination.total)
     } catch {
       setLoadError('Could not load jobs. Please try again.')
     } finally {
@@ -40,9 +67,14 @@ export default function JobsPage() {
 
   // first load, honouring ?search= from the landing page
   useEffect(() => {
-    const q = new URLSearchParams(window.location.search).get('search') ?? ''
-    setSearch(q)
-    loadJobs(q)
+    const params = new URLSearchParams(window.location.search)
+    const initial: Filters = {
+      search: params.get('search') ?? '',
+      type: params.get('type') ?? '',
+      location: params.get('location') ?? '',
+    }
+    setFilters(initial)
+    loadJobs(initial, 1)
   }, [loadJobs])
 
   // remember which jobs this seeker already applied to
@@ -80,7 +112,7 @@ export default function JobsPage() {
       setNotice(jobId, { type: 'success', text: 'Application sent' })
     } catch (err) {
       if (axios.isAxiosError(err)) {
-                if (err.response?.data?.needsProfile) {
+        if (err.response?.data?.needsProfile) {
           router.push('/onboarding')
         } else if (err.response?.status === 409) {
           setApplied((prev) => new Set(prev).add(jobId))
@@ -101,6 +133,11 @@ export default function JobsPage() {
     }
   }
 
+  const goTo = (p: number) => {
+    loadJobs(filters, p)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
   return (
     <div className="min-h-screen bg-white">
       <Navbar />
@@ -110,17 +147,33 @@ export default function JobsPage() {
         <form
           onSubmit={(e) => {
             e.preventDefault()
-            loadJobs(search)
+            loadJobs(filters, 1)
           }}
-          className="mb-8 flex gap-2"
+          className="mb-8 grid gap-2 sm:grid-cols-[1fr_9rem_9rem_auto]"
         >
           <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            value={filters.search}
+            onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
             placeholder="Search by title or description"
-            className="w-full rounded border border-zinc-300 px-4 py-3 text-zinc-900 placeholder-zinc-400 focus:border-red-600 focus:outline-none focus:ring-1 focus:ring-red-600"
+            className={fieldCls}
           />
-          <button className="rounded bg-red-600 px-6 font-medium text-white hover:bg-red-700">
+          <select
+            value={filters.type}
+            onChange={(e) => setFilters((f) => ({ ...f, type: e.target.value }))}
+            aria-label="Job type"
+            className={fieldCls}
+          >
+            {TYPES.map((t) => (
+              <option key={t.value} value={t.value}>{t.label}</option>
+            ))}
+          </select>
+          <input
+            value={filters.location}
+            onChange={(e) => setFilters((f) => ({ ...f, location: e.target.value }))}
+            placeholder="Location"
+            className={fieldCls}
+          />
+          <button className="rounded bg-red-600 px-6 py-3 font-medium text-white hover:bg-red-700">
             Search
           </button>
         </form>
@@ -132,69 +185,92 @@ export default function JobsPage() {
         ) : jobs.length === 0 ? (
           <p className="text-zinc-500">No jobs found.</p>
         ) : (
-          <div className="divide-y divide-zinc-200 border-y border-zinc-200">
-            {jobs.map((job) => {
-              const isApplied = applied.has(job.id)
-              const isApplying = applyingId === job.id
-              const notice = notices[job.id]
+          <>
+            <p className="mb-2 text-sm text-zinc-500">{total} open {total === 1 ? 'job' : 'jobs'}</p>
+            <div className="divide-y divide-zinc-200 border-y border-zinc-200">
+              {jobs.map((job) => {
+                const isApplied = applied.has(job.id)
+                const isApplying = applyingId === job.id
+                const notice = notices[job.id]
 
-              return (
-                <article key={job.id} className="py-6">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                     <h2 className="text-xl font-semibold text-zinc-900">
-  <Link href={`/jobs/${job.id}`} className="hover:text-red-600">{job.title}</Link>
-</h2>
-                      <p className="mt-1 text-sm text-zinc-500">
-                        {job.company?.name} · {job.location} · {formatSalary(job.salary)} ·{' '}
-                        {formatRelativeTime(job.createdAt)}
-                      </p>
-                    </div>
-                    <span
-                      className={`whitespace-nowrap rounded border px-2.5 py-1 text-xs font-medium ${
-                        jobTypeColors[job.type] ?? ''
-                      }`}
-                    >
-                      {job.type.replace('_', ' ')}
-                    </span>
-                  </div>
-
-                  <p className="mt-3 line-clamp-2 text-zinc-600">{job.description}</p>
-
-                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex flex-wrap gap-2">
-                      {job.skills.map((skill) => (
-                        <span key={skill} className="rounded bg-zinc-100 px-2 py-1 text-xs text-zinc-600">
-                          {skill}
-                        </span>
-                      ))}
-                    </div>
-
-                    {role !== 'RECRUITER' && (
-                      <button
-                        data-testid="apply-btn"
-                        onClick={() => apply(job.id)}
-                        disabled={status === 'loading' || isApplying || isApplied}
-                        className={`rounded px-5 py-2 text-sm font-medium transition ${
-                          isApplied
-                            ? 'cursor-default border border-zinc-300 bg-zinc-50 text-zinc-500'
-                            : 'bg-red-600 text-white hover:bg-red-700 disabled:opacity-60'
+                return (
+                  <article key={job.id} className="py-6">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <h2 className="text-xl font-semibold text-zinc-900">
+                          <Link href={`/jobs/${job.id}`} className="hover:text-red-600">{job.title}</Link>
+                        </h2>
+                        <p className="mt-1 text-sm text-zinc-500">
+                          {job.company?.name} · {job.location} · {formatSalary(job.salary)} ·{' '}
+                          {formatRelativeTime(job.createdAt)}
+                        </p>
+                      </div>
+                      <span
+                        className={`whitespace-nowrap rounded border px-2.5 py-1 text-xs font-medium ${
+                          jobTypeColors[job.type] ?? ''
                         }`}
                       >
-                        {isApplied ? 'Applied' : isApplying ? 'Applying…' : 'Apply'}
-                      </button>
-                    )}
-                  </div>
+                        {job.type.replace('_', ' ')}
+                      </span>
+                    </div>
 
-                  {notice && (
-                    <Alert variant={notice.type} className="mt-4">
-                      {notice.text}
-                    </Alert>
-                  )}
-                </article>
-              )
-            })}
-          </div>
+                    <p className="mt-3 line-clamp-2 text-zinc-600">{job.description}</p>
+
+                    <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex flex-wrap gap-2">
+                        {job.skills.map((skill) => (
+                          <span key={skill} className="rounded bg-zinc-100 px-2 py-1 text-xs text-zinc-600">
+                            {skill}
+                          </span>
+                        ))}
+                      </div>
+
+                      {role !== 'RECRUITER' && (
+                        <button
+                          data-testid="apply-btn"
+                          onClick={() => apply(job.id)}
+                          disabled={status === 'loading' || isApplying || isApplied}
+                          className={`rounded px-5 py-2 text-sm font-medium transition ${
+                            isApplied
+                              ? 'cursor-default border border-zinc-300 bg-zinc-50 text-zinc-500'
+                              : 'bg-red-600 text-white hover:bg-red-700 disabled:opacity-60'
+                          }`}
+                        >
+                          {isApplied ? 'Applied' : isApplying ? 'Applying…' : 'Apply'}
+                        </button>
+                      )}
+                    </div>
+
+                    {notice && (
+                      <Alert variant={notice.type} className="mt-4">
+                        {notice.text}
+                      </Alert>
+                    )}
+                  </article>
+                )
+              })}
+            </div>
+
+            {pages > 1 && (
+              <div className="mt-6 flex items-center justify-between text-sm">
+                <button
+                  onClick={() => goTo(page - 1)}
+                  disabled={page <= 1}
+                  className="rounded border border-zinc-300 px-4 py-2 text-zinc-700 hover:border-red-600 hover:text-red-600 disabled:opacity-40"
+                >
+                  ← Previous
+                </button>
+                <span className="text-zinc-500">Page {page} of {pages}</span>
+                <button
+                  onClick={() => goTo(page + 1)}
+                  disabled={page >= pages}
+                  className="rounded border border-zinc-300 px-4 py-2 text-zinc-700 hover:border-red-600 hover:text-red-600 disabled:opacity-40"
+                >
+                  Next →
+                </button>
+              </div>
+            )}
+          </>
         )}
       </main>
     </div>
