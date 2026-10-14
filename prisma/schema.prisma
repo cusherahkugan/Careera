@@ -136,6 +136,12 @@ model Company {
   description   String?
   location      String?
 
+  // LinkedIn-style public profile
+  tagline       String?
+  founded       String?
+  specialties   String[]  @default([])
+  linkedin      String?
+
   jobs          Job[]
 
   createdAt     DateTime  @default(now())

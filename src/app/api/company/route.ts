@@ -36,6 +36,14 @@ const companySchema = z.object({
     .trim()
     .min(20, 'Tell candidates a little about the company (at least 20 characters)')
     .max(2000, 'Description must be 2000 characters or less'),
+  tagline: z.string().trim().max(120, 'Tagline must be 120 characters or less').optional(),
+  founded: z
+    .string()
+    .trim()
+    .regex(/^$|^(19|20)\d{2}$/, 'Founded must be a 4-digit year')
+    .optional(),
+  linkedin: optionalUrl,
+  specialties: z.array(z.string().trim().min(1).max(40)).max(15, 'At most 15 specialties').optional(),
 })
 
 const nullable = (v: string | undefined) => (v === undefined ? undefined : v.trim() === '' ? null : v.trim())
@@ -79,6 +87,10 @@ export async function PUT(req: Request) {
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const input = companySchema.parse(await req.json())
+    const specialties = input.specialties
+      ? [...new Map(input.specialties.map((s) => [s.toLowerCase(), s] as [string, string])).values()]
+      : undefined
+
     const data = {
       name: input.name,
       website: nullable(input.website),
@@ -87,6 +99,10 @@ export async function PUT(req: Request) {
       size: nullable(input.size),
       location: nullable(input.location),
       description: nullable(input.description),
+      tagline: nullable(input.tagline),
+      founded: nullable(input.founded),
+      linkedin: nullable(input.linkedin),
+      specialties,
     }
 
     let company

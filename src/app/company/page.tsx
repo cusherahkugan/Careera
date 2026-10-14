@@ -16,6 +16,8 @@ const labelCls = 'mb-1.5 block text-sm font-medium text-zinc-700'
 const ghostBtn =
   'rounded border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:border-red-600 hover:text-red-600'
 
+const csv = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean)
+
 /** Shrink the logo to max 200px so the stored data URL stays small. */
 function resizeLogo(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -53,10 +55,14 @@ export default function CompanyPage() {
 
   const [form, setForm] = useState({
     name: '',
+    tagline: '',
     website: '',
+    linkedin: '',
     industry: '',
     size: '',
+    founded: '',
     location: '',
+    specialties: '',
     description: '',
   })
   const [logo, setLogo] = useState('')
@@ -83,10 +89,14 @@ export default function CompanyPage() {
           setLogo(c.logo ?? '')
           setForm({
             name: c.name ?? '',
+            tagline: c.tagline ?? '',
             website: c.website ?? '',
+            linkedin: c.linkedin ?? '',
             industry: c.industry ?? '',
             size: c.size ?? '',
+            founded: c.founded ?? '',
             location: c.location ?? '',
+            specialties: (c.specialties ?? []).join(', '),
             description: c.description ?? '',
           })
         }
@@ -120,9 +130,13 @@ export default function CompanyPage() {
     setSuccess('')
     setSaving(true)
     try {
-      const { data } = await axios.put('/api/company', { ...form, logo })
+      const { data } = await axios.put('/api/company', {
+        ...form,
+        specialties: csv(form.specialties),
+        logo,
+      })
       setCompany((prev) => ({ ...(prev ?? data.company), ...data.company, members: prev?.members }))
-      setSuccess('Company details saved. You can now post jobs, and candidates will see them on your postings.')
+      setSuccess('Company profile saved. Candidates can now see it, and you can post jobs.')
       window.scrollTo({ top: 0, behavior: 'smooth' })
     } catch (err) {
       setError(errorText(err, 'Could not save your company'))
@@ -150,10 +164,19 @@ export default function CompanyPage() {
     <div className="min-h-screen bg-zinc-50">
       <Navbar />
       <main className="mx-auto max-w-2xl px-5 py-10">
-        <h1 className="font-serif text-3xl font-bold text-zinc-900">Company details</h1>
-        <p className="mb-8 mt-2 text-zinc-600">
-          Candidates see this on every job your company posts. Fill it in once to start posting jobs.
-        </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="font-serif text-3xl font-bold text-zinc-900">Company profile</h1>
+            <p className="mb-8 mt-2 text-zinc-600">
+              This is your public page. Candidates see it on every job your company posts.
+            </p>
+          </div>
+          {company && (
+            <Link href={`/companies/${company.id}`} className={ghostBtn}>
+              View public page
+            </Link>
+          )}
+        </div>
 
         {error && <Alert variant="error" className="mb-6">{error}</Alert>}
         {success && (
@@ -190,6 +213,15 @@ export default function CompanyPage() {
             <label htmlFor="name" className={labelCls}>Company name</label>
             <input id="name" name="name" value={form.name} onChange={change} className={inputCls} required />
           </div>
+
+          <div>
+            <label htmlFor="tagline" className={labelCls}>
+              Tagline <span className="font-normal text-zinc-400">({form.tagline.length}/120)</span>
+            </label>
+            <input id="tagline" name="tagline" maxLength={120} value={form.tagline} onChange={change}
+              placeholder="Building the future of logistics" className={inputCls} />
+          </div>
+
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <label htmlFor="industry" className={labelCls}>Industry</label>
@@ -202,16 +234,33 @@ export default function CompanyPage() {
                 placeholder="50-200" className={inputCls} />
             </div>
             <div>
-              <label htmlFor="location" className={labelCls}>Location</label>
+              <label htmlFor="location" className={labelCls}>Headquarters</label>
               <input id="location" name="location" value={form.location} onChange={change}
                 placeholder="Colombo, Sri Lanka" className={inputCls} required />
+            </div>
+            <div>
+              <label htmlFor="founded" className={labelCls}>Founded (year)</label>
+              <input id="founded" name="founded" value={form.founded} onChange={change}
+                inputMode="numeric" maxLength={4} placeholder="2015" className={inputCls} />
             </div>
             <div>
               <label htmlFor="website" className={labelCls}>Website</label>
               <input id="website" name="website" type="url" value={form.website} onChange={change}
                 placeholder="https://example.com" className={inputCls} />
             </div>
+            <div>
+              <label htmlFor="linkedin" className={labelCls}>LinkedIn page</label>
+              <input id="linkedin" name="linkedin" type="url" value={form.linkedin} onChange={change}
+                placeholder="https://linkedin.com/company/..." className={inputCls} />
+            </div>
           </div>
+
+          <div>
+            <label htmlFor="specialties" className={labelCls}>Specialties (comma separated)</label>
+            <input id="specialties" name="specialties" value={form.specialties} onChange={change}
+              placeholder="Cloud, Mobile apps, AI" className={inputCls} />
+          </div>
+
           <div>
             <label htmlFor="description" className={labelCls}>
               About the company <span className="font-normal text-zinc-400">({form.description.length}/2000)</span>
@@ -221,7 +270,7 @@ export default function CompanyPage() {
           </div>
           <button type="submit" disabled={saving}
             className="w-full rounded bg-red-600 py-3 font-medium text-white hover:bg-red-700 disabled:opacity-50">
-            {saving ? 'Saving…' : 'Save company details'}
+            {saving ? 'Saving…' : 'Save company profile'}
           </button>
         </form>
 

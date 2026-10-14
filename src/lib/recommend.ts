@@ -71,6 +71,11 @@ export function localMatch(candidate: CandidateProfile, job: JobForMatching): Lo
   const mySkills = new Set(candidate.skills.map(canon))
   const resume = candidate.resumeText ?? ''
 
+  // 3) breadth: how many of the person's skills show up in the job text at all
+  const jobText = `${job.title} ${job.description} ${job.requirements.join(' ')}`
+  const mentionedSkills = candidate.skills.filter((s) => mentions(jobText, s))
+  const breadth = Math.min(mentionedSkills.length / Math.max(Math.min(candidate.skills.length, 8), 1), 1)
+
   // 1) skills: full credit if listed on the profile, partial if only the resume mentions it
   const matchedSkills: string[] = []
   let skillPoints = 0
@@ -83,7 +88,12 @@ export function localMatch(candidate: CandidateProfile, job: JobForMatching): Lo
       skillPoints += 0.6
     }
   }
-  const skillScore = Math.min(skillPoints / Math.max(job.skills.length, 1), 1)
+
+  // jobs posted without a skills list used to score 0 for everyone -
+  // judge those by which of the candidate's skills the job text mentions
+  const hasJobSkills = job.skills.length > 0
+  if (!hasJobSkills) matchedSkills.push(...mentionedSkills.slice(0, 8))
+  const skillScore = hasJobSkills ? Math.min(skillPoints / job.skills.length, 1) : breadth
 
   // 2) role: does the title look like something the person wants / does today?
   const title = job.title.toLowerCase()
@@ -106,11 +116,6 @@ export function localMatch(candidate: CandidateProfile, job: JobForMatching): Lo
   }
   if (roleScore >= 0.5) roleMatch = true
 
-  // 3) breadth: how many of the person's skills show up in the job text at all
-  const jobText = `${job.description} ${job.requirements.join(' ')}`
-  const mentioned = candidate.skills.filter((s) => mentions(jobText, s)).length
-  const breadth = Math.min(mentioned / Math.max(Math.min(candidate.skills.length, 8), 1), 1)
-
   const score = Math.round(100 * (0.6 * skillScore + 0.3 * roleScore + 0.1 * breadth))
   return { score, matchedSkills, roleMatch }
 }
@@ -119,6 +124,8 @@ export function describeLocalMatch(job: JobForMatching, m: LocalMatch): string {
   const parts: string[] = []
   if (job.skills.length > 0) {
     parts.push(`Matches ${m.matchedSkills.length} of ${job.skills.length} required skills`)
+  } else if (m.matchedSkills.length > 0) {
+    parts.push(`Mentions ${m.matchedSkills.length} of your skills`)
   }
   if (m.roleMatch) parts.push('fits a role you are looking for')
   return parts.length > 0 ? parts.join(', ') + '.' : 'Based on your profile.'

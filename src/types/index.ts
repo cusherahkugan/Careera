@@ -59,6 +59,10 @@ export interface Company {
   size: string | null
   description: string | null
   location: string | null
+  tagline: string | null
+  founded: string | null
+  specialties: string[]
+  linkedin: string | null
   joinCode: string | null
   members?: { id: string; name: string; email: string }[]
 }

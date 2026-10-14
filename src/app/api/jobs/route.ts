@@ -5,10 +5,13 @@ import { z } from 'zod'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getCompanyId, isCompanyComplete, recruiterContext } from '@/lib/company'
+import { localMatch, type CandidateProfile } from '@/lib/recommend'
 import { jobSchema } from '@/lib/validations'
 
+const MATCH_POOL = 300 // how many open jobs are scored when sorting by match
+
 // GET /api/jobs
-//  - seekers / visitors: every OPEN job
+//  - seekers / visitors: every OPEN job (?sort=match ranks it for a signed-in seeker)
 //  - recruiters: ONLY their own company's jobs (open and closed), whoever posted them
 export async function GET(req: Request) {
   try {
@@ -16,6 +19,7 @@ export async function GET(req: Request) {
     const search = searchParams.get('search')
     const type = searchParams.get('type')
     const location = searchParams.get('location')
+    const sort = searchParams.get('sort')
     const skills = searchParams.get('skills')?.split(',').filter(Boolean)
     const page = Math.max(parseInt(searchParams.get('page') || '1') || 1, 1)
     const limit = Math.min(Math.max(parseInt(searchParams.get('limit') || '10') || 10, 1), 50)
@@ -51,14 +55,61 @@ export async function GET(req: Request) {
     if (location) where.location = { contains: location, mode: 'insensitive' }
     if (skills && skills.length > 0) where.skills = { hasSome: skills }
 
+    const include = {
+      company: { select: { name: true, location: true } },
+      recruiter: { select: { name: true } },
+      _count: { select: { applications: true } },
+    } satisfies Prisma.JobInclude
+
+    // seekers: rank every open job by profile match + how fresh it is
+    if (!isRecruiter && sort === 'match' && session?.user?.role === 'JOB_SEEKER') {
+      const profile = await prisma.profile.findUnique({ where: { userId: session.user.id } })
+
+      if (profile && (profile.skills.length > 0 || profile.preferredRoles.length > 0)) {
+        const pool = await prisma.job.findMany({
+          where,
+          include,
+          orderBy: { createdAt: 'desc' },
+          take: MATCH_POOL,
+        })
+
+        const candidate: CandidateProfile = {
+          skills: profile.skills,
+          preferredRoles: profile.preferredRoles,
+          currentDesignation: profile.currentDesignation,
+          headline: profile.headline,
+          resumeText: profile.resumeText,
+          experienceCount: profile.experience.length,
+        }
+
+        const now = Date.now()
+        const ranked = pool
+          .map((job) => {
+            const m = localMatch(candidate, job)
+            const ageDays = (now - job.createdAt.getTime()) / 86_400_000
+            const freshness = Math.max(0, 15 - ageDays) // brand-new jobs get up to +15
+            return {
+              rank: m.score + freshness,
+              job: { ...job, matchScore: m.score, matchedSkills: m.matchedSkills },
+            }
+          })
+          .sort((a, b) => b.rank - a.rank)
+
+        const total = ranked.length
+        const jobs = ranked.slice((page - 1) * limit, page * limit).map((r) => r.job)
+
+        return NextResponse.json({
+          jobs,
+          sortedBy: 'match',
+          pagination: { total, page, limit, pages: Math.max(Math.ceil(total / limit), 1) },
+        })
+      }
+    }
+
     const [jobs, total] = await Promise.all([
       prisma.job.findMany({
         where,
-        include: {
-          company: { select: { name: true, location: true } },
-          recruiter: { select: { name: true } },
-          _count: { select: { applications: true } },
-        },
+        include,
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
@@ -68,6 +119,7 @@ export async function GET(req: Request) {
 
     return NextResponse.json({
       jobs,
+      sortedBy: 'new',
       pagination: { total, page, limit, pages: Math.ceil(total / limit) },
     })
   } catch (error) {

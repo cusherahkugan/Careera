@@ -116,6 +116,9 @@ export function Navbar() {
               Jobs
             </Link>
           )}
+          <Link href="/companies" className={link}>
+            {role === 'RECRUITER' ? 'Find companies' : 'Companies'}
+          </Link>
           {status === 'loading' ? null : session ? (
             <>
               {role === 'RECRUITER' ? (
@@ -123,7 +126,7 @@ export function Navbar() {
                   <Link href="/dashboard" className={link}>Company dashboard</Link>
                   <Link href="/dashboard/applicants" className={link}>Applicants</Link>
                   <Link href="/dashboard/jobs/new" className={link}>Post a job</Link>
-                  <Link href="/company" className={link}>Company details</Link>
+                  <Link href="/company" className={link}>Company profile</Link>
                 </>
               ) : (
                 <>

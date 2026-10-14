@@ -1,17 +1,24 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import axios from 'axios'
 import { useSession } from 'next-auth/react'
 import { Navbar } from '@/components/navbar'
 import { Alert } from '@/components/ui/alert'
-import { formatRelativeTime, formatSalary, jobTypeColors } from '@/lib/utils'
+import {
+  formatRelativeTime,
+  formatSalary,
+  getMatchScoreColor,
+  jobTypeColors,
+} from '@/lib/utils'
 import type { Job } from '@/types'
 
 type Notice = { type: 'error' | 'success'; text: string }
 type Filters = { search: string; type: string; location: string }
+type Sort = 'match' | 'new'
+type JobRow = Job & { matchScore?: number; matchedSkills?: string[] }
 
 const TYPES = [
   { value: '', label: 'All types' },
@@ -30,9 +37,11 @@ export default function JobsPage() {
   const { data: session, status } = useSession()
   const role = session?.user.role
   const isRecruiter = role === 'RECRUITER'
+  const isSeeker = role === 'JOB_SEEKER'
 
-  const [jobs, setJobs] = useState<Job[]>([])
+  const [jobs, setJobs] = useState<JobRow[]>([])
   const [filters, setFilters] = useState<Filters>({ search: '', type: '', location: '' })
+  const [sort, setSort] = useState<Sort>('new')
   const [page, setPage] = useState(1)
   const [pages, setPages] = useState(1)
   const [total, setTotal] = useState(0)
@@ -41,8 +50,10 @@ export default function JobsPage() {
   const [applied, setApplied] = useState<Set<string>>(new Set())
   const [applyingId, setApplyingId] = useState<string | null>(null)
   const [notices, setNotices] = useState<Record<string, Notice>>({})
+  const requestId = useRef(0)
 
-  const loadJobs = useCallback(async (f: Filters, p: number) => {
+  const loadJobs = useCallback(async (f: Filters, p: number, s: Sort) => {
+    const id = ++requestId.current
     setLoading(true)
     setLoadError('')
     try {
@@ -51,32 +62,37 @@ export default function JobsPage() {
           search: f.search || undefined,
           type: f.type || undefined,
           location: f.location || undefined,
+          sort: s,
           page: p,
           limit: 10,
         },
       })
+      if (id !== requestId.current) return // a newer request replaced this one
       setJobs(data.jobs)
       setPage(p)
       setPages(data.pagination.pages || 1)
       setTotal(data.pagination.total)
     } catch {
-      setLoadError('Could not load jobs. Please try again.')
+      if (id === requestId.current) setLoadError('Could not load jobs. Please try again.')
     } finally {
-      setLoading(false)
+      if (id === requestId.current) setLoading(false)
     }
   }, [])
 
-  // first load, honouring ?search= from the landing page
+  // first load once we know who the visitor is: seekers start with "Best match"
   useEffect(() => {
+    if (status === 'loading') return
     const params = new URLSearchParams(window.location.search)
     const initial: Filters = {
       search: params.get('search') ?? '',
       type: params.get('type') ?? '',
       location: params.get('location') ?? '',
     }
+    const initialSort: Sort = role === 'JOB_SEEKER' ? 'match' : 'new'
     setFilters(initial)
-    loadJobs(initial, 1)
-  }, [loadJobs])
+    setSort(initialSort)
+    loadJobs(initial, 1, initialSort)
+  }, [status, role, loadJobs])
 
   // remember which jobs this seeker already applied to
   useEffect(() => {
@@ -136,8 +152,13 @@ export default function JobsPage() {
   }
 
   const goTo = (p: number) => {
-    loadJobs(filters, p)
+    loadJobs(filters, p, sort)
     window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const changeSort = (s: Sort) => {
+    setSort(s)
+    loadJobs(filters, 1, s)
   }
 
   return (
@@ -151,9 +172,9 @@ export default function JobsPage() {
         <form
           onSubmit={(e) => {
             e.preventDefault()
-            loadJobs(filters, 1)
+            loadJobs(filters, 1, sort)
           }}
-          className="mb-8 grid gap-2 sm:grid-cols-[1fr_9rem_9rem_auto]"
+          className="mb-4 grid gap-2 sm:grid-cols-[1fr_9rem_9rem_auto]"
         >
           <input
             value={filters.search}
@@ -182,6 +203,21 @@ export default function JobsPage() {
           </button>
         </form>
 
+        {isSeeker && (
+          <div className="mb-6 flex items-center gap-2 text-sm text-zinc-600">
+            <label htmlFor="sort">Sort by</label>
+            <select
+              id="sort"
+              value={sort}
+              onChange={(e) => changeSort(e.target.value as Sort)}
+              className="rounded border border-zinc-300 bg-white px-3 py-1.5 text-zinc-800 focus:border-red-600 focus:outline-none"
+            >
+              <option value="match">Best match (recommended + newest)</option>
+              <option value="new">Newest first</option>
+            </select>
+          </div>
+        )}
+
         {loadError && <Alert variant="error" className="mb-6">{loadError}</Alert>}
 
         {loading ? (
@@ -196,6 +232,7 @@ export default function JobsPage() {
                 const isApplied = applied.has(job.id)
                 const isApplying = applyingId === job.id
                 const notice = notices[job.id]
+                const showScore = sort === 'match' && job.matchScore !== undefined
 
                 return (
                   <article key={job.id} className="py-6">
@@ -205,17 +242,27 @@ export default function JobsPage() {
                           <Link href={`/jobs/${job.id}`} className="hover:text-red-600">{job.title}</Link>
                         </h2>
                         <p className="mt-1 text-sm text-zinc-500">
-                          {job.company?.name} · {job.location} · {formatSalary(job.salary)} ·{' '}
+                          <Link href={`/companies/${job.companyId}`} className="hover:text-red-600">
+                            {job.company?.name}
+                          </Link>
+                          {' · '}{job.location} · {formatSalary(job.salary)} ·{' '}
                           {formatRelativeTime(job.createdAt)}
                         </p>
                       </div>
-                      <span
-                        className={`whitespace-nowrap rounded border px-2.5 py-1 text-xs font-medium ${
-                          jobTypeColors[job.type] ?? ''
-                        }`}
-                      >
-                        {job.type.replace('_', ' ')}
-                      </span>
+                      <div className="flex flex-col items-end gap-1">
+                        <span
+                          className={`whitespace-nowrap rounded border px-2.5 py-1 text-xs font-medium ${
+                            jobTypeColors[job.type] ?? ''
+                          }`}
+                        >
+                          {job.type.replace('_', ' ')}
+                        </span>
+                        {showScore && (
+                          <span className={`text-xs font-semibold ${getMatchScoreColor(job.matchScore!)}`}>
+                            {Math.round(job.matchScore!)}% match
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     <p className="mt-3 line-clamp-2 text-zinc-600">{job.description}</p>

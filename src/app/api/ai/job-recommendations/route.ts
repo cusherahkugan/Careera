@@ -10,11 +10,31 @@ import {
 } from '@/lib/recommend'
 
 const AI_CANDIDATES = 15 // only the best local matches are sent to the AI
+const AI_TIMEOUT_MS = 8_000 // never make the dashboard wait longer than this for the AI
+const AI_COOLDOWN_MS = 5 * 60 * 1000 // after an AI failure, skip it for a while
 const CACHE_MS = 10 * 60 * 1000
+const MIN_RESULTS = 5
 
 // Same profile + same jobs within 10 minutes -> reuse the AI answer.
 // Local-only answers are NOT cached, so a fixed API key works immediately.
 const cache = new Map<string, { at: number; body: unknown }>()
+let aiDownUntil = 0
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    const t = setTimeout(() => resolve(null), ms)
+    p.then(
+      (v) => {
+        clearTimeout(t)
+        resolve(v)
+      },
+      () => {
+        clearTimeout(t)
+        resolve(null)
+      }
+    )
+  })
+}
 
 // GET /api/ai/job-recommendations
 export async function GET() {
@@ -75,14 +95,21 @@ export async function GET() {
       })
       .sort((a, b) => b.localScore - a.localScore)
 
-    // 2) let the AI re-score the best ones using the profile + resume text
+    // 2) let the AI re-score the best ones - but never wait long for it
     const top = scored.slice(0, AI_CANDIDATES)
-    const ai = await rankJobsWithAI(
-      candidate,
-      top.map(({ job }) => job)
-    )
+    let ai: Awaited<ReturnType<typeof rankJobsWithAI>> = null
+    if (Date.now() >= aiDownUntil) {
+      ai = await withTimeout(
+        rankJobsWithAI(
+          candidate,
+          top.map(({ job }) => job)
+        ),
+        AI_TIMEOUT_MS
+      )
+      if (!ai) aiDownUntil = Date.now() + AI_COOLDOWN_MS
+    }
 
-    const recommendations = top
+    let recommendations = top
       .map(({ job, local, localScore }) => {
         const aiResult = ai?.[job.id]
         const matchScore = aiResult ? Math.round(0.7 * aiResult.score + 0.3 * localScore) : localScore
@@ -96,6 +123,22 @@ export async function GET() {
       .filter((j) => j.matchScore >= 15)
       .sort((a, b) => b.matchScore - a.matchScore)
       .slice(0, 10)
+
+    // never leave the seeker with an empty list: pad with the newest openings
+    if (recommendations.length < MIN_RESULTS) {
+      const have = new Set(recommendations.map((r) => r.id))
+      const fillers = scored
+        .filter(({ job }) => !have.has(job.id))
+        .sort((a, b) => b.job.createdAt.getTime() - a.job.createdAt.getTime())
+        .slice(0, MIN_RESULTS - recommendations.length)
+        .map(({ job, local, localScore }) => ({
+          ...job,
+          matchScore: localScore,
+          matchAnalysis: 'New opening you may be interested in.',
+          matchedSkills: local.matchedSkills,
+        }))
+      recommendations = [...recommendations, ...fillers]
+    }
 
     const body = {
       recommendations,
