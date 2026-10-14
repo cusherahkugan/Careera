@@ -2,15 +2,22 @@ import OpenAI from 'openai'
 import type { CandidateProfile, JobForMatching } from '@/lib/recommend'
 
 const openai = process.env.OPENAI_API_KEY
-  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 25_000, maxRetries: 1 })
   : null
 
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini'
 
-/** Models sometimes wrap JSON in ```json fences - strip them before parsing. */
+/** Models sometimes wrap JSON in ```json fences or add text around it - be forgiving. */
 function safeJson<T>(text: string): T {
   const cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim()
-  return JSON.parse(cleaned) as T
+  try {
+    return JSON.parse(cleaned) as T
+  } catch {
+    const start = cleaned.search(/[\[{]/)
+    const end = Math.max(cleaned.lastIndexOf('}'), cleaned.lastIndexOf(']'))
+    if (start === -1 || end <= start) throw new Error('No JSON found in the model response')
+    return JSON.parse(cleaned.slice(start, end + 1)) as T
+  }
 }
 
 export interface ParsedResume {
@@ -43,6 +50,7 @@ export async function parseResume(resumeText: string): Promise<ParsedResume | nu
   try {
     const completion = await openai.chat.completions.create({
       model: MODEL,
+      response_format: { type: 'json_object' },
       messages: [
         {
           role: 'system',
@@ -102,6 +110,7 @@ export async function calculateJobMatch(
   try {
     const completion = await openai.chat.completions.create({
       model: MODEL,
+      response_format: { type: 'json_object' },
       messages: [
         {
           role: 'system',
@@ -139,21 +148,26 @@ Return match score (0-100) and brief analysis as JSON only.`,
 }
 
 /**
- * Score several jobs against one candidate in a SINGLE request, using the
- * profile (skills, roles, designation) and the text of the uploaded resume.
- * Returns null when no API key is set or the call fails, so callers can fall
- * back to the local scores.
+ * Score several jobs against one candidate in a SINGLE request.
+ * Jobs are numbered 1..N in the prompt (models mangle long database ids), and
+ * the answer is mapped back to the real job ids here.
+ * Returns null when there is no API key or the call fails, so callers can
+ * fall back to the local scores.
  */
 export async function rankJobsWithAI(
   candidate: CandidateProfile,
   jobs: JobForMatching[]
 ): Promise<Record<string, { score: number; analysis: string }> | null> {
-  if (!openai || jobs.length === 0) return null
+  if (!openai) {
+    console.warn('rankJobsWithAI: OPENAI_API_KEY is not set, using local scores only')
+    return null
+  }
+  if (jobs.length === 0) return null
 
   const jobLines = jobs
     .map(
-      (j) =>
-        `- id: ${j.id} | title: ${j.title} | skills: ${j.skills.join(', ')} | requirements: ${j.requirements
+      (j, i) =>
+        `${i + 1}. title: ${j.title} | skills: ${j.skills.join(', ') || 'none listed'} | requirements: ${j.requirements
           .slice(0, 6)
           .join('; ')} | about: ${j.description.slice(0, 300)}`
     )
@@ -162,11 +176,14 @@ export async function rankJobsWithAI(
   try {
     const completion = await openai.chat.completions.create({
       model: MODEL,
+      response_format: { type: 'json_object' },
       messages: [
         {
           role: 'system',
-          content: `You are a recruiter matching one candidate to job openings. Judge fit from the candidate's skills, preferred roles, current designation and resume. Return ONLY a JSON array, one object per job:
-[{"id": "job id exactly as given", "score": number 0-100, "analysis": "one short sentence (max 25 words) saying why"}]`,
+          content: `You are a recruiter matching one candidate to numbered job openings. Judge fit from the candidate's skills, preferred roles, current designation and resume.
+Return ONLY a JSON object in exactly this shape, with one entry per job:
+{"results": [{"n": 1, "score": 0-100, "analysis": "one short sentence (max 25 words) saying why"}]}
+"n" is the job number from the list.`,
         },
         {
           role: 'user',
@@ -181,7 +198,7 @@ ${(candidate.resumeText ?? 'No resume uploaded').slice(0, 4000)}
 JOBS
 ${jobLines}
 
-Return the JSON array only.`,
+Return the JSON object only.`,
         },
       ],
       temperature: 0.2,
@@ -190,14 +207,30 @@ Return the JSON array only.`,
     const content = completion.choices[0]?.message?.content
     if (!content) return null
 
-    const parsed = safeJson<Array<{ id: string; score: number; analysis: string }>>(content)
+    const parsed = safeJson<unknown>(content)
+    let list: unknown[] = []
+    if (Array.isArray(parsed)) list = parsed
+    else if (parsed && typeof parsed === 'object') {
+      const obj = parsed as Record<string, unknown>
+      const found = obj.results ?? obj.jobs ?? Object.values(obj).find(Array.isArray)
+      if (Array.isArray(found)) list = found
+    }
+
     const out: Record<string, { score: number; analysis: string }> = {}
-    for (const item of parsed) {
-      if (!item?.id) continue
-      out[item.id] = {
+    for (const raw of list) {
+      const item = raw as { n?: unknown; index?: unknown; id?: unknown; score?: unknown; analysis?: unknown }
+      const n = Number(item?.n ?? item?.index ?? item?.id)
+      const job = Number.isInteger(n) ? jobs[n - 1] : undefined
+      if (!job) continue
+      out[job.id] = {
         score: Math.max(0, Math.min(100, Number(item.score) || 0)),
         analysis: String(item.analysis ?? ''),
       }
+    }
+
+    if (Object.keys(out).length === 0) {
+      console.error('Job ranking: model answer had no usable results:', content.slice(0, 300))
+      return null
     }
     return out
   } catch (error) {
@@ -282,6 +315,7 @@ export async function analyzeCandidateProfile(
   try {
     const completion = await openai.chat.completions.create({
       model: MODEL,
+      response_format: { type: 'json_object' },
       messages: [
         {
           role: 'system',

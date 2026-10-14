@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { z } from 'zod'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { getCompanyId, recruiterContext } from '@/lib/company'
 import { jobUpdateSchema } from '@/lib/validations'
 
 interface RouteParams {
@@ -28,6 +29,7 @@ export async function GET(_req: Request, context: RouteParams) {
             location: true,
           },
         },
+        recruiter: { select: { name: true } },
         _count: { select: { applications: true } },
       },
     })
@@ -36,13 +38,17 @@ export async function GET(_req: Request, context: RouteParams) {
       return NextResponse.json({ error: 'Job not found' }, { status: 404 })
     }
 
-    // views count candidates, not the recruiter opening their own posting / edit page
     const session = await getServerSession(authOptions)
-    if (session?.user?.id !== job.recruiterId) {
-      await prisma.job.update({
-        where: { id },
-        data: { views: { increment: 1 } },
-      })
+
+    if (session?.user?.role === 'RECRUITER') {
+      // recruiters only see their own company's jobs
+      const companyId = await getCompanyId(session.user.id)
+      if (!companyId || companyId !== job.companyId) {
+        return NextResponse.json({ error: 'Job not found' }, { status: 404 })
+      }
+    } else {
+      // views count candidates only
+      await prisma.job.update({ where: { id }, data: { views: { increment: 1 } } })
     }
 
     return NextResponse.json({ job })
@@ -52,28 +58,25 @@ export async function GET(_req: Request, context: RouteParams) {
   }
 }
 
-// PUT /api/jobs/[id] - recruiter who owns the job
+// PUT /api/jobs/[id] - any recruiter of the job's company
 export async function PUT(req: Request, context: RouteParams) {
   try {
-    const session = await getServerSession(authOptions)
-
-    if (!session?.user || session.user.role !== 'RECRUITER') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const ctx = await recruiterContext()
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { id } = await context.params
     const data = jobUpdateSchema.parse(await req.json())
 
     const existingJob = await prisma.job.findUnique({ where: { id } })
 
-    if (!existingJob || existingJob.recruiterId !== session.user.id) {
+    if (!existingJob || !ctx.companyId || existingJob.companyId !== ctx.companyId) {
       return NextResponse.json({ error: 'Job not found or unauthorized' }, { status: 404 })
     }
 
     const job = await prisma.job.update({
       where: { id },
       data,
-      include: { company: { select: { name: true, logo: true } } },
+      include: { company: { select: { name: true } } },
     })
 
     return NextResponse.json({ job })
@@ -90,20 +93,17 @@ export async function PUT(req: Request, context: RouteParams) {
   }
 }
 
-// DELETE /api/jobs/[id] - recruiter who owns the job
+// DELETE /api/jobs/[id] - any recruiter of the job's company
 export async function DELETE(_req: Request, context: RouteParams) {
   try {
-    const session = await getServerSession(authOptions)
-
-    if (!session?.user || session.user.role !== 'RECRUITER') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const ctx = await recruiterContext()
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { id } = await context.params
 
     const existingJob = await prisma.job.findUnique({ where: { id } })
 
-    if (!existingJob || existingJob.recruiterId !== session.user.id) {
+    if (!existingJob || !ctx.companyId || existingJob.companyId !== ctx.companyId) {
       return NextResponse.json({ error: 'Job not found or unauthorized' }, { status: 404 })
     }
 

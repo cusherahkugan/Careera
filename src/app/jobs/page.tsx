@@ -29,6 +29,7 @@ export default function JobsPage() {
   const router = useRouter()
   const { data: session, status } = useSession()
   const role = session?.user.role
+  const isRecruiter = role === 'RECRUITER'
 
   const [jobs, setJobs] = useState<Job[]>([])
   const [filters, setFilters] = useState<Filters>({ search: '', type: '', location: '' })
@@ -109,11 +110,12 @@ export default function JobsPage() {
     try {
       await axios.post('/api/applications', { jobId })
       setApplied((prev) => new Set(prev).add(jobId))
-      setNotice(jobId, { type: 'success', text: 'Application sent' })
+      setNotice(jobId, { type: 'success', text: 'Application sent. Track it under "My applications".' })
     } catch (err) {
       if (axios.isAxiosError(err)) {
         if (err.response?.data?.needsProfile) {
-          router.push('/onboarding')
+          setNotice(jobId, { type: 'error', text: 'Please complete your profile first. Taking you there…' })
+          setTimeout(() => router.push('/onboarding'), 1200)
         } else if (err.response?.status === 409) {
           setApplied((prev) => new Set(prev).add(jobId))
           setNotice(jobId, { type: 'success', text: 'You already applied to this job' })
@@ -142,7 +144,9 @@ export default function JobsPage() {
     <div className="min-h-screen bg-white">
       <Navbar />
       <main className="mx-auto max-w-4xl px-5 py-10">
-        <h1 className="mb-6 font-serif text-3xl font-bold text-zinc-900">Find jobs</h1>
+        <h1 className="mb-6 font-serif text-3xl font-bold text-zinc-900">
+          {isRecruiter ? 'Your company’s jobs' : 'Find jobs'}
+        </h1>
 
         <form
           onSubmit={(e) => {
@@ -186,7 +190,7 @@ export default function JobsPage() {
           <p className="text-zinc-500">No jobs found.</p>
         ) : (
           <>
-            <p className="mb-2 text-sm text-zinc-500">{total} open {total === 1 ? 'job' : 'jobs'}</p>
+            <p className="mb-2 text-sm text-zinc-500">{total} {isRecruiter ? '' : 'open '}{total === 1 ? 'job' : 'jobs'}</p>
             <div className="divide-y divide-zinc-200 border-y border-zinc-200">
               {jobs.map((job) => {
                 const isApplied = applied.has(job.id)
@@ -225,19 +229,27 @@ export default function JobsPage() {
                         ))}
                       </div>
 
-                      {role !== 'RECRUITER' && (
-                        <button
-                          data-testid="apply-btn"
-                          onClick={() => apply(job.id)}
-                          disabled={status === 'loading' || isApplying || isApplied}
-                          className={`rounded px-5 py-2 text-sm font-medium transition ${
-                            isApplied
-                              ? 'cursor-default border border-zinc-300 bg-zinc-50 text-zinc-500'
-                              : 'bg-red-600 text-white hover:bg-red-700 disabled:opacity-60'
-                          }`}
-                        >
-                          {isApplied ? 'Applied' : isApplying ? 'Applying…' : 'Apply'}
-                        </button>
+                      {!isRecruiter && (
+                        <div className="flex items-center gap-2">
+                          <Link
+                            href={`/jobs/${job.id}`}
+                            className="rounded border border-zinc-300 px-4 py-2 text-sm text-zinc-700 hover:border-red-600 hover:text-red-600"
+                          >
+                            Details
+                          </Link>
+                          <button
+                            data-testid="apply-btn"
+                            onClick={() => apply(job.id)}
+                            disabled={status === 'loading' || isApplying || isApplied}
+                            className={`rounded px-5 py-2 text-sm font-medium transition ${
+                              isApplied
+                                ? 'cursor-default border border-zinc-300 bg-zinc-50 text-zinc-500'
+                                : 'bg-red-600 text-white hover:bg-red-700 disabled:opacity-60'
+                            }`}
+                          >
+                            {isApplied ? 'Applied' : isApplying ? 'Applying…' : 'Apply'}
+                          </button>
+                        </div>
                       )}
                     </div>
 

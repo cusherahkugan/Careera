@@ -101,6 +101,8 @@ export function Navbar() {
   const { data: session, status } = useSession()
   const role = session?.user.role
 
+  const link = 'text-zinc-600 hover:text-red-600'
+
   return (
     <header className="sticky top-0 z-50 border-b border-zinc-200 bg-white">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-y-2 px-5 py-4">
@@ -108,31 +110,26 @@ export function Navbar() {
           Careera<span className="text-red-600">.</span>
         </Link>
         <nav className="flex flex-wrap items-center gap-5 text-sm">
-          <Link href="/jobs" className="text-zinc-600 hover:text-red-600">
-            Jobs
-          </Link>
+          {/* job seekers (and visitors) browse the job board; recruiters only work with their company */}
+          {role !== 'RECRUITER' && (
+            <Link href="/jobs" className={link}>
+              Jobs
+            </Link>
+          )}
           {status === 'loading' ? null : session ? (
             <>
-              <Link href="/dashboard" className="text-zinc-600 hover:text-red-600">
-                {role === 'RECRUITER' ? 'My postings' : 'My applications'}
-              </Link>
-              {role === 'RECRUITER' && (
+              {role === 'RECRUITER' ? (
                 <>
-                  <Link href="/dashboard/applicants" className="text-zinc-600 hover:text-red-600">
-                    Applicants
-                  </Link>
-                  <Link href="/dashboard/jobs/new" className="text-zinc-600 hover:text-red-600">
-                    Post a job
-                  </Link>
-                  <Link href="/company" className="text-zinc-600 hover:text-red-600">
-                    Company
-                  </Link>
+                  <Link href="/dashboard" className={link}>Company dashboard</Link>
+                  <Link href="/dashboard/applicants" className={link}>Applicants</Link>
+                  <Link href="/dashboard/jobs/new" className={link}>Post a job</Link>
+                  <Link href="/company" className={link}>Company details</Link>
                 </>
-              )}
-              {role === 'JOB_SEEKER' && (
-                <Link href="/profile" className="text-zinc-600 hover:text-red-600">
-                  My profile
-                </Link>
+              ) : (
+                <>
+                  <Link href="/dashboard" className={link}>My applications</Link>
+                  <Link href="/profile" className={link}>My profile</Link>
+                </>
               )}
               <NotificationBell />
               <Link href="/settings" className="hidden text-zinc-400 hover:text-red-600 sm:inline">
@@ -141,10 +138,7 @@ export function Navbar() {
                   {role === 'RECRUITER' ? 'Recruiter' : 'Job seeker'}
                 </span>
               </Link>
-              <button
-                onClick={() => signOut({ callbackUrl: '/' })}
-                className="text-zinc-600 hover:text-red-600"
-              >
+              <button onClick={() => signOut({ callbackUrl: '/' })} className={link}>
                 Sign out
               </button>
             </>

@@ -5,10 +5,13 @@ import { z } from 'zod'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { buildIcs } from '@/lib/ics'
+import { getCompanyId, recruiterContext } from '@/lib/company'
 import { describeInterview, logEvent, notify } from '@/lib/notify'
 import { interviewCreateSchema } from '@/lib/validations'
 
-// GET /api/interviews?upcoming=true - my interviews (as candidate or recruiter)
+// GET /api/interviews?upcoming=true
+//  - seekers: their own interviews
+//  - recruiters: interviews for every job of their company
 export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions)
@@ -17,11 +20,16 @@ export async function GET(req: Request) {
     const isRecruiter = session.user.role === 'RECRUITER'
     const upcoming = new URL(req.url).searchParams.get('upcoming') === 'true'
 
-    const where: Prisma.InterviewWhereInput = {
-      application: isRecruiter
-        ? { job: { recruiterId: session.user.id } }
-        : { applicantId: session.user.id },
+    let application: Prisma.ApplicationWhereInput
+    if (isRecruiter) {
+      const companyId = await getCompanyId(session.user.id)
+      if (!companyId) return NextResponse.json({ interviews: [] })
+      application = { job: { companyId } }
+    } else {
+      application = { applicantId: session.user.id }
     }
+
+    const where: Prisma.InterviewWhereInput = { application }
     if (upcoming) {
       where.scheduledAt = { gte: new Date(Date.now() - 2 * 60 * 60 * 1000) }
       where.status = { in: ['SCHEDULED', 'CONFIRMED'] }
@@ -48,13 +56,11 @@ export async function GET(req: Request) {
   }
 }
 
-// POST /api/interviews - schedule an interview (recruiter who owns the job)
+// POST /api/interviews - schedule an interview (recruiter of the job's company)
 export async function POST(req: Request) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user || session.user.role !== 'RECRUITER') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const ctx = await recruiterContext()
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const data = interviewCreateSchema.parse(await req.json())
 
@@ -70,7 +76,7 @@ export async function POST(req: Request) {
       },
     })
 
-    if (!application || application.job.recruiterId !== session.user.id) {
+    if (!application || !ctx.companyId || application.job.companyId !== ctx.companyId) {
       return NextResponse.json({ error: 'Application not found' }, { status: 404 })
     }
     if (application.status === 'REJECTED' || application.status === 'WITHDRAWN') {
@@ -93,10 +99,10 @@ export async function POST(req: Request) {
       await prisma.application.update({ where: { id: application.id }, data: { status: 'INTERVIEW' } })
       await logEvent(application.id, 'STATUS', 'Status changed to "Interview stage"')
     }
-    await logEvent(application.id, 'INTERVIEW', 'Interview scheduled', describeInterview(application.job.company.name, application.job.title, interview))
 
     const company = application.job.company.name
     const details = describeInterview(company, application.job.title, interview)
+    await logEvent(application.id, 'INTERVIEW', 'Interview scheduled', details)
 
     await notify(application.applicantId, {
       title: `Interview scheduled: ${application.job.title} at ${company}`,

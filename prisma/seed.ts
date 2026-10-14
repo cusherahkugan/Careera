@@ -19,10 +19,12 @@ async function main() {
 
   console.log('✨ Cleared existing data')
 
+  const password = await bcrypt.hash('password123', 10)
+
   const jobSeeker = await prisma.user.create({
     data: {
       email: 'seeker@example.com',
-      password: await bcrypt.hash('password123', 10),
+      password,
       name: 'Alex Johnson',
       role: 'JOB_SEEKER',
       profile: {
@@ -44,28 +46,26 @@ async function main() {
               description: 'Led development of a microservices architecture.',
             },
           ],
-          education: [
-            { degree: 'BS Computer Science', school: 'University of California', year: '2019' },
-          ],
+          education: [{ degree: 'BS Computer Science', school: 'University of California', year: '2019' }],
           linkedIn: 'https://linkedin.com/in/alexjohnson',
           github: 'https://github.com/alexjohnson',
         },
       },
     },
-    include: { profile: true },
   })
-
   console.log('👤 Created job seeker:', jobSeeker.email)
 
+  // recruiter #1 creates the company
   const recruiter = await prisma.user.create({
     data: {
       email: 'recruiter@example.com',
-      password: await bcrypt.hash('password123', 10),
+      password,
       name: 'Sarah Williams',
       role: 'RECRUITER',
-      company: {
+      ownedCompany: {
         create: {
           name: 'InnovateTech Solutions',
+          joinCode: 'INNOV123',
           industry: 'Technology',
           size: '50-200',
           description:
@@ -75,18 +75,28 @@ async function main() {
         },
       },
     },
-    include: { company: true },
+    include: { ownedCompany: true },
   })
+  const companyId = recruiter.ownedCompany!.id
+  await prisma.user.update({ where: { id: recruiter.id }, data: { companyId } })
 
-  console.log('👤 Created recruiter:', recruiter.email)
-  console.log('🏢 Created company:', recruiter.company?.name)
+  // recruiter #2 works for the same company
+  const recruiter2 = await prisma.user.create({
+    data: {
+      email: 'recruiter2@example.com',
+      password,
+      name: 'Daniel Perera',
+      role: 'RECRUITER',
+      companyId,
+    },
+  })
+  console.log('👤 Created recruiters:', recruiter.email, recruiter2.email)
 
-  const companyId = recruiter.company!.id
-
-  const jobs = await prisma.job.createMany({
+  const base = { companyId }
+  await prisma.job.createMany({
     data: [
       {
-        companyId,
+        ...base,
         recruiterId: recruiter.id,
         title: 'Senior Full Stack Engineer',
         description:
@@ -97,13 +107,10 @@ async function main() {
           'Experience with Node.js and RESTful APIs',
           'Knowledge of PostgreSQL or similar databases',
           'Familiarity with cloud platforms (AWS, GCP, or Azure)',
-          'Experience with Git and CI/CD pipelines',
         ],
         responsibilities: [
           'Design and implement scalable backend services',
           'Build responsive user interfaces with React',
-          'Collaborate with product and design teams',
-          'Write clean, maintainable, and testable code',
           'Mentor junior developers and conduct code reviews',
         ],
         type: 'FULL_TIME',
@@ -112,7 +119,7 @@ async function main() {
         skills: ['JavaScript', 'TypeScript', 'React', 'Node.js', 'PostgreSQL', 'AWS'],
       },
       {
-        companyId,
+        ...base,
         recruiterId: recruiter.id,
         title: 'Frontend Developer',
         description:
@@ -121,23 +128,16 @@ async function main() {
           '3+ years of frontend development experience',
           'Expert knowledge of React and modern JavaScript',
           'Strong CSS and responsive design skills',
-          'Experience with state management (Redux, Zustand)',
-          'Understanding of web performance optimization',
         ],
-        responsibilities: [
-          'Build reusable component libraries',
-          'Implement pixel-perfect designs',
-          'Optimize application performance',
-          'Collaborate with designers and backend engineers',
-        ],
+        responsibilities: ['Build reusable component libraries', 'Optimize application performance'],
         type: 'REMOTE',
         location: 'Remote',
         salary: '$100,000 - $140,000',
         skills: ['React', 'JavaScript', 'CSS', 'Tailwind CSS', 'Next.js'],
       },
       {
-        companyId,
-        recruiterId: recruiter.id,
+        ...base,
+        recruiterId: recruiter2.id,
         title: 'DevOps Engineer',
         description:
           'Help us build and maintain robust infrastructure for our applications. Automate deployments, monitor systems, and ensure reliability at scale.',
@@ -146,22 +146,16 @@ async function main() {
           'Strong knowledge of AWS or GCP',
           'Experience with Docker and Kubernetes',
           'Proficiency in Infrastructure as Code (Terraform)',
-          'Experience with CI/CD tools (Jenkins, GitHub Actions)',
         ],
-        responsibilities: [
-          'Manage cloud infrastructure and resources',
-          'Build and maintain CI/CD pipelines',
-          'Monitor system performance and reliability',
-          'Automate operational tasks',
-        ],
+        responsibilities: ['Manage cloud infrastructure', 'Build and maintain CI/CD pipelines'],
         type: 'FULL_TIME',
         location: 'San Francisco, CA',
         salary: '$130,000 - $170,000',
         skills: ['AWS', 'Docker', 'Kubernetes', 'Terraform', 'CI/CD'],
       },
       {
-        companyId,
-        recruiterId: recruiter.id,
+        ...base,
+        recruiterId: recruiter2.id,
         title: 'Product Designer',
         description:
           'Shape the future of our products through exceptional design. Create intuitive, delightful experiences that users love.',
@@ -169,35 +163,24 @@ async function main() {
           '3+ years of product design experience',
           'Strong portfolio demonstrating UI/UX work',
           'Proficiency in Figma or similar design tools',
-          'Experience with design systems',
         ],
-        responsibilities: [
-          'Design user interfaces for web and mobile',
-          'Create and maintain design systems',
-          'Conduct user research and testing',
-          'Present designs to stakeholders',
-        ],
+        responsibilities: ['Design user interfaces for web and mobile', 'Create and maintain design systems'],
         type: 'FULL_TIME',
         location: 'San Francisco, CA (Hybrid)',
         salary: '$110,000 - $150,000',
         skills: ['Figma', 'UI/UX Design', 'Design Systems', 'Prototyping'],
       },
       {
-        companyId,
-        recruiterId: recruiter.id,
+        ...base,
+        recruiterId: recruiter2.id,
         title: 'Data Scientist Intern',
         description:
           'Learn and grow with our data science team. Work on real projects involving machine learning and data analysis.',
         requirements: [
           'Currently pursuing a degree in Computer Science, Statistics, or a related field',
           'Knowledge of Python and data analysis libraries',
-          'Understanding of machine learning concepts',
         ],
-        responsibilities: [
-          'Assist in data analysis projects',
-          'Build and train machine learning models',
-          'Create data visualizations',
-        ],
+        responsibilities: ['Assist in data analysis projects', 'Build and train machine learning models'],
         type: 'INTERNSHIP',
         location: 'Remote',
         salary: '$25 - $35/hour',
@@ -205,11 +188,9 @@ async function main() {
       },
     ],
   })
-
-  console.log('💼 Created', jobs.count, 'jobs')
+  console.log('💼 Created jobs')
 
   const firstJob = await prisma.job.findFirst({ orderBy: { createdAt: 'asc' } })
-
   if (firstJob) {
     const application = await prisma.application.create({
       data: {
@@ -248,14 +229,13 @@ async function main() {
         link: `/applications/${application.id}`,
       },
     })
-
-    console.log('📝 Created sample application with an interview')
   }
 
   console.log('✅ Database seeded successfully!')
-  console.log('\n📧 Test Accounts:')
-  console.log('Job Seeker: seeker@example.com / password123')
-  console.log('Recruiter: recruiter@example.com / password123')
+  console.log('\n📧 Test Accounts (password: password123):')
+  console.log('Job Seeker: seeker@example.com')
+  console.log('Recruiter:  recruiter@example.com  (company join code: INNOV123)')
+  console.log('Recruiter:  recruiter2@example.com (same company)')
 }
 
 main()

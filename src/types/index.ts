@@ -50,6 +50,19 @@ export interface Profile {
   user?: { name: string; email: string; image: string | null }
 }
 
+export interface Company {
+  id: string
+  name: string
+  logo: string | null
+  website: string | null
+  industry: string | null
+  size: string | null
+  description: string | null
+  location: string | null
+  joinCode: string | null
+  members?: { id: string; name: string; email: string }[]
+}
+
 export interface Job {
   id: string
   companyId: string
@@ -68,9 +81,11 @@ export interface Job {
   updatedAt: string
   company?: {
     name: string
-    logo: string | null
+    logo?: string | null
     location: string | null
   }
+  /** the recruiter who posted it (shown to recruiters of the same company) */
+  recruiter?: { name: string }
   _count?: {
     applications: number
   }

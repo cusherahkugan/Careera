@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { buildIcs } from '@/lib/ics'
+import { getCompanyId } from '@/lib/company'
 import { describeInterview, logEvent, notify } from '@/lib/notify'
 import { interviewUpdateSchema } from '@/lib/validations'
 
@@ -12,7 +13,7 @@ interface RouteParams {
 }
 
 // PATCH /api/interviews/[id]
-//  recruiter: reschedule | cancel | complete
+//  recruiter (of the job's company): reschedule | cancel | complete
 //  candidate: confirm | decline
 export async function PATCH(req: Request, context: RouteParams) {
   try {
@@ -35,8 +36,8 @@ export async function PATCH(req: Request, context: RouteParams) {
     })
 
     const app = interview?.application
-    const isRecruiter =
-      !!app && session.user.role === 'RECRUITER' && app.job.recruiterId === session.user.id
+    const companyId = session.user.role === 'RECRUITER' ? await getCompanyId(session.user.id) : null
+    const isRecruiter = !!app && !!companyId && app.job.companyId === companyId
     const isApplicant =
       !!app && session.user.role === 'JOB_SEEKER' && app.applicantId === session.user.id
 

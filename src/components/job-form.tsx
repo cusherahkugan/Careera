@@ -77,6 +77,11 @@ export function JobForm({ job }: { job?: Job }) {
       router.push('/dashboard')
       router.refresh()
     } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.data?.needsCompany) {
+        setError('Add your company details before posting a job. Taking you there…')
+        setTimeout(() => router.push('/company'), 1200)
+        return
+      }
       setError(errorText(err, 'Could not save the job'))
       setSaving(false)
     }

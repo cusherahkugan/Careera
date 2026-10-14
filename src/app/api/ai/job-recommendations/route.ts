@@ -12,7 +12,8 @@ import {
 const AI_CANDIDATES = 15 // only the best local matches are sent to the AI
 const CACHE_MS = 10 * 60 * 1000
 
-// Same profile + same jobs within 10 minutes -> reuse the answer instead of paying for another AI call.
+// Same profile + same jobs within 10 minutes -> reuse the AI answer.
+// Local-only answers are NOT cached, so a fixed API key works immediately.
 const cache = new Map<string, { at: number; body: unknown }>()
 
 // GET /api/ai/job-recommendations
@@ -38,7 +39,7 @@ export async function GET() {
     const [jobs, applied] = await Promise.all([
       prisma.job.findMany({
         where: { isActive: true },
-        include: { company: { select: { name: true, logo: true, location: true } } },
+        include: { company: { select: { name: true, location: true } } },
         orderBy: { createdAt: 'desc' },
         take: 100,
       }),
@@ -92,7 +93,7 @@ export async function GET() {
           matchedSkills: local.matchedSkills,
         }
       })
-      .filter((j) => j.matchScore >= 25)
+      .filter((j) => j.matchScore >= 15)
       .sort((a, b) => b.matchScore - a.matchScore)
       .slice(0, 10)
 
@@ -103,8 +104,10 @@ export async function GET() {
       usedResume: !!profile.resumeText,
     }
 
-    cache.set(cacheKey, { at: Date.now(), body })
-    if (cache.size > 200) cache.delete(cache.keys().next().value as string)
+    if (ai) {
+      cache.set(cacheKey, { at: Date.now(), body })
+      if (cache.size > 200) cache.delete(cache.keys().next().value as string)
+    }
 
     return NextResponse.json(body)
   } catch (error) {

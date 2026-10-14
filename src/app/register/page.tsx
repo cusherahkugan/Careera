@@ -24,12 +24,13 @@ function RegisterForm() {
     confirmPassword: '',
     role: defaultRole,
     companyName: '',
+    joinCode: '',
   })
+  // recruiters either start a new company or join an existing one with its code
+  const [companyMode, setCompanyMode] = useState<'new' | 'join'>('new')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  // Already signed in (including right after we sign the new user in below):
-  // the dashboard sends job seekers with an incomplete profile on to /onboarding.
   useEffect(() => {
     // `loading` is still true while we sign in and redirect ourselves below
     if (status === 'authenticated' && !loading) router.replace('/dashboard')
@@ -51,13 +52,20 @@ function RegisterForm() {
       setError('Password must be at least 6 characters')
       return
     }
-    if (formData.role === 'RECRUITER' && !formData.companyName.trim()) {
-      setError('Company name is required for recruiters')
-      return
+    if (formData.role === 'RECRUITER') {
+      if (companyMode === 'new' && !formData.companyName.trim()) {
+        setError('Company name is required')
+        return
+      }
+      if (companyMode === 'join' && !formData.joinCode.trim()) {
+        setError('Enter the company join code')
+        return
+      }
     }
 
     setLoading(true)
     const email = formData.email.trim().toLowerCase()
+    const isRecruiter = formData.role === 'RECRUITER'
 
     try {
       await axios.post('/api/auth/register', {
@@ -65,7 +73,8 @@ function RegisterForm() {
         email,
         password: formData.password,
         role: formData.role,
-        companyName: formData.companyName.trim() || undefined,
+        companyName: isRecruiter && companyMode === 'new' ? formData.companyName.trim() : undefined,
+        joinCode: isRecruiter && companyMode === 'join' ? formData.joinCode.trim() : undefined,
       })
     } catch (err) {
       setError(
@@ -77,7 +86,6 @@ function RegisterForm() {
       return
     }
 
-    // Account exists now: sign straight in so the session is kept (7 days).
     const result = await signIn('credentials', {
       email,
       password: formData.password,
@@ -85,17 +93,17 @@ function RegisterForm() {
     })
 
     if (!result || result.error) {
-      // account was created but auto sign-in failed; let them sign in manually
       router.push('/login')
       return
     }
 
-    // job seekers finish their profile first; recruiters go to their dashboard
-    router.push(formData.role === 'JOB_SEEKER' ? '/onboarding' : '/dashboard')
+    // seekers finish their profile first; recruiters go on to fill in the company details
+    if (!isRecruiter) router.push('/onboarding')
+    else router.push(companyMode === 'new' ? '/company' : '/dashboard')
     router.refresh()
   }
 
-  const roleBtn = (active: boolean) =>
+  const toggleBtn = (active: boolean) =>
     `rounded border py-2.5 text-sm font-medium transition ${
       active
         ? 'border-red-600 bg-red-50 text-red-700'
@@ -124,18 +132,12 @@ function RegisterForm() {
             <div>
               <span className={labelCls}>I am a</span>
               <div className="grid grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  onClick={() => setFormData((p) => ({ ...p, role: 'JOB_SEEKER' }))}
-                  className={roleBtn(formData.role === 'JOB_SEEKER')}
-                >
+                <button type="button" onClick={() => setFormData((p) => ({ ...p, role: 'JOB_SEEKER' }))}
+                  className={toggleBtn(formData.role === 'JOB_SEEKER')}>
                   Job seeker
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setFormData((p) => ({ ...p, role: 'RECRUITER' }))}
-                  className={roleBtn(formData.role === 'RECRUITER')}
-                >
+                <button type="button" onClick={() => setFormData((p) => ({ ...p, role: 'RECRUITER' }))}
+                  className={toggleBtn(formData.role === 'RECRUITER')}>
                   Recruiter
                 </button>
               </div>
@@ -155,10 +157,30 @@ function RegisterForm() {
             </div>
 
             {formData.role === 'RECRUITER' && (
-              <div>
-                <label htmlFor="companyName" className={labelCls}>Company name</label>
-                <input id="companyName" name="companyName" value={formData.companyName}
-                  onChange={handleChange} className={inputCls} required />
+              <div className="space-y-3 rounded border border-zinc-200 bg-zinc-50 p-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <button type="button" onClick={() => setCompanyMode('new')} className={toggleBtn(companyMode === 'new')}>
+                    New company
+                  </button>
+                  <button type="button" onClick={() => setCompanyMode('join')} className={toggleBtn(companyMode === 'join')}>
+                    Join a company
+                  </button>
+                </div>
+                {companyMode === 'new' ? (
+                  <div>
+                    <label htmlFor="companyName" className={labelCls}>Company name</label>
+                    <input id="companyName" name="companyName" value={formData.companyName}
+                      onChange={handleChange} className={inputCls} />
+                    <p className="mt-1 text-xs text-zinc-500">You will add the rest of the company details next.</p>
+                  </div>
+                ) : (
+                  <div>
+                    <label htmlFor="joinCode" className={labelCls}>Company join code</label>
+                    <input id="joinCode" name="joinCode" value={formData.joinCode}
+                      onChange={handleChange} className={`${inputCls} uppercase`} placeholder="e.g. 1A2B3C4D" />
+                    <p className="mt-1 text-xs text-zinc-500">Ask a recruiter at your company. It is shown on their Company page.</p>
+                  </div>
+                )}
               </div>
             )}
 
@@ -176,11 +198,8 @@ function RegisterForm() {
                 onChange={handleChange} className={inputCls} required />
             </div>
 
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full rounded bg-red-600 py-2.5 font-medium text-white hover:bg-red-700 disabled:opacity-50"
-            >
+            <button type="submit" disabled={loading}
+              className="w-full rounded bg-red-600 py-2.5 font-medium text-white hover:bg-red-700 disabled:opacity-50">
               {loading ? 'Creating account…' : 'Create account'}
             </button>
           </form>

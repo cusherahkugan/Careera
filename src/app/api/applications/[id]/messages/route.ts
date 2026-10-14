@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { z } from 'zod'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { getCompanyId } from '@/lib/company'
 import { notify } from '@/lib/notify'
 import { messageSchema } from '@/lib/validations'
 
@@ -10,14 +11,15 @@ interface RouteParams {
   params: Promise<{ id: string }>
 }
 
-async function loadAccess(id: string, userId: string) {
+async function loadAccess(id: string, userId: string, role: string) {
   const application = await prisma.application.findUnique({
     where: { id },
-    include: { job: { select: { title: true, recruiterId: true } } },
+    include: { job: { select: { title: true, recruiterId: true, companyId: true } } },
   })
   if (!application) return null
+  const companyId = role === 'RECRUITER' ? await getCompanyId(userId) : null
   const isApplicant = application.applicantId === userId
-  const isRecruiter = application.job.recruiterId === userId
+  const isRecruiter = !!companyId && application.job.companyId === companyId
   if (!isApplicant && !isRecruiter) return null
   return { application, isRecruiter }
 }
@@ -29,7 +31,7 @@ export async function GET(_req: Request, context: RouteParams) {
     if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { id } = await context.params
-    if (!(await loadAccess(id, session.user.id))) {
+    if (!(await loadAccess(id, session.user.id, session.user.role))) {
       return NextResponse.json({ error: 'Application not found' }, { status: 404 })
     }
 
@@ -59,7 +61,7 @@ export async function POST(req: Request, context: RouteParams) {
     if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { id } = await context.params
-    const access = await loadAccess(id, session.user.id)
+    const access = await loadAccess(id, session.user.id, session.user.role)
     if (!access) return NextResponse.json({ error: 'Application not found' }, { status: 404 })
 
     const { content } = messageSchema.parse(await req.json())

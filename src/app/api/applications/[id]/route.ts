@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { getCompanyId } from '@/lib/company'
 import { logEvent, notify, statusCopy } from '@/lib/notify'
 import { applicationStatusLabels } from '@/lib/utils'
 import { statusUpdateSchema } from '@/lib/validations'
@@ -10,7 +11,7 @@ interface RouteParams {
   params: Promise<{ id: string }>
 }
 
-// GET /api/applications/[id] - full detail for the applicant or the job's recruiter
+// GET /api/applications/[id] - full detail for the applicant or a recruiter of the job's company
 export async function GET(_req: Request, context: RouteParams) {
   try {
     const session = await getServerSession(authOptions)
@@ -24,7 +25,7 @@ export async function GET(_req: Request, context: RouteParams) {
     const application = await prisma.application.findUnique({
       where: { id },
       include: {
-        job: { include: { company: true } },
+        job: { include: { company: { select: { name: true, location: true } } } },
         applicant: {
           select: {
             id: true,
@@ -65,8 +66,9 @@ export async function GET(_req: Request, context: RouteParams) {
       return NextResponse.json({ error: 'Application not found' }, { status: 404 })
     }
 
+    const companyId = session.user.role === 'RECRUITER' ? await getCompanyId(session.user.id) : null
     const isApplicant = application.applicantId === session.user.id
-    const isRecruiter = application.job.recruiterId === session.user.id
+    const isRecruiter = !!companyId && application.job.companyId === companyId
 
     if (!isApplicant && !isRecruiter) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
@@ -83,7 +85,7 @@ export async function GET(_req: Request, context: RouteParams) {
 }
 
 // PATCH /api/applications/[id]
-//  - recruiter: change status (emails + notifies the applicant)
+//  - recruiter (of the job's company): change status (emails + notifies the applicant)
 //  - applicant: withdraw
 export async function PATCH(req: Request, context: RouteParams) {
   try {
@@ -108,8 +110,8 @@ export async function PATCH(req: Request, context: RouteParams) {
       },
     })
 
-    const isRecruiter =
-      !!application && session.user.role === 'RECRUITER' && application.job.recruiterId === session.user.id
+    const companyId = session.user.role === 'RECRUITER' ? await getCompanyId(session.user.id) : null
+    const isRecruiter = !!application && !!companyId && application.job.companyId === companyId
     const isApplicant =
       !!application && session.user.role === 'JOB_SEEKER' && application.applicantId === session.user.id
 
@@ -138,7 +140,7 @@ export async function PATCH(req: Request, context: RouteParams) {
       where: { id },
       data: { status: next },
       include: {
-        job: { include: { company: true } },
+        job: { include: { company: { select: { name: true } } } },
         applicant: { select: { id: true, name: true, email: true } },
       },
     })

@@ -4,29 +4,37 @@ import { Prisma, JobType } from '@prisma/client'
 import { z } from 'zod'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { getCompanyId, isCompanyComplete, recruiterContext } from '@/lib/company'
 import { jobSchema } from '@/lib/validations'
 
-// GET /api/jobs - List jobs with filters (?mine=true for a recruiter's own jobs)
+// GET /api/jobs
+//  - seekers / visitors: every OPEN job
+//  - recruiters: ONLY their own company's jobs (open and closed), whoever posted them
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url)
     const search = searchParams.get('search')
     const type = searchParams.get('type')
     const location = searchParams.get('location')
-    const mine = searchParams.get('mine') === 'true'
     const skills = searchParams.get('skills')?.split(',').filter(Boolean)
     const page = Math.max(parseInt(searchParams.get('page') || '1') || 1, 1)
     const limit = Math.min(Math.max(parseInt(searchParams.get('limit') || '10') || 10, 1), 50)
 
+    const session = await getServerSession(authOptions)
+    const isRecruiter = session?.user?.role === 'RECRUITER'
+
     const where: Prisma.JobWhereInput = {}
 
-    if (mine) {
-      const session = await getServerSession(authOptions)
-      if (!session?.user || session.user.role !== 'RECRUITER') {
+    if (isRecruiter) {
+      const companyId = await getCompanyId(session!.user.id)
+      if (!companyId) {
+        return NextResponse.json({ jobs: [], pagination: { total: 0, page, limit, pages: 1 } })
+      }
+      where.companyId = companyId
+    } else {
+      if (searchParams.get('mine') === 'true') {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
       }
-      where.recruiterId = session.user.id
-    } else {
       where.isActive = true
     }
 
@@ -47,7 +55,8 @@ export async function GET(req: Request) {
       prisma.job.findMany({
         where,
         include: {
-          company: { select: { name: true, logo: true, location: true } },
+          company: { select: { name: true, location: true } },
+          recruiter: { select: { name: true } },
           _count: { select: { applications: true } },
         },
         orderBy: { createdAt: 'desc' },
@@ -67,40 +76,40 @@ export async function GET(req: Request) {
   }
 }
 
-// POST /api/jobs - Create new job (recruiters only)
+// POST /api/jobs - create a job for the recruiter's company
 export async function POST(req: Request) {
   try {
-    const session = await getServerSession(authOptions)
-
-    if (!session?.user || session.user.role !== 'RECRUITER') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const ctx = await recruiterContext()
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const body = await req.json()
     const data = jobSchema.parse(body)
 
-    const company = await prisma.company.findUnique({
-      where: { userId: session.user.id },
-    })
+    const company = ctx.companyId
+      ? await prisma.company.findUnique({ where: { id: ctx.companyId } })
+      : null
 
-    if (!company) {
-      return NextResponse.json({ error: 'Company profile not found' }, { status: 404 })
+    if (!company || !isCompanyComplete(company)) {
+      return NextResponse.json(
+        { error: 'Add your company details before posting a job', needsCompany: true },
+        { status: 400 }
+      )
     }
 
     const job = await prisma.job.create({
       data: {
         ...data,
         companyId: company.id,
-        recruiterId: session.user.id,
+        recruiterId: ctx.userId,
       },
-      include: { company: { select: { name: true, logo: true } } },
+      include: { company: { select: { name: true } } },
     })
 
     return NextResponse.json({ job }, { status: 201 })
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json(
-        { error: 'Invalid input', details: error.errors },
+        { error: error.errors[0]?.message ?? 'Invalid input', details: error.errors },
         { status: 400 }
       )
     }

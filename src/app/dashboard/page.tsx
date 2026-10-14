@@ -16,7 +16,7 @@ import {
   getMatchScoreColor,
   getMatchScoreLabel,
 } from '@/lib/utils'
-import type { Application, ApplicationStatus, Interview, Job, Profile } from '@/types'
+import type { Application, ApplicationStatus, Company, Interview, Job, Profile } from '@/types'
 
 type Recommendation = Job & { matchScore: number; matchAnalysis: string; matchedSkills?: string[] }
 
@@ -29,6 +29,9 @@ export default function DashboardPage() {
 
   const [applications, setApplications] = useState<Application[]>([])
   const [myJobs, setMyJobs] = useState<Job[]>([])
+  const [company, setCompany] = useState<Company | null>(null)
+  const [companyComplete, setCompanyComplete] = useState(true)
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [interviews, setInterviews] = useState<Interview[]>([])
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
@@ -60,10 +63,13 @@ export default function DashboardPage() {
     setLoadError('')
     try {
       if (role === 'RECRUITER') {
-        const [jobsRes, appsRes] = await Promise.all([
-          axios.get('/api/jobs', { params: { mine: true, limit: 50 } }),
+        const [companyRes, jobsRes, appsRes] = await Promise.all([
+          axios.get('/api/company'),
+          axios.get('/api/jobs', { params: { limit: 50 } }),
           axios.get('/api/applications'),
         ])
+        setCompany(companyRes.data.company)
+        setCompanyComplete(!!companyRes.data.complete)
         setMyJobs(jobsRes.data.jobs)
         setApplications(appsRes.data.applications)
       } else {
@@ -158,6 +164,14 @@ export default function DashboardPage() {
     }
   }
 
+  const toggleCollapsed = (jobId: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(jobId)) next.delete(jobId)
+      else next.add(jobId)
+      return next
+    })
+
   if (status === 'loading' || status === 'unauthenticated') {
     return <div className="min-h-screen bg-white p-8 text-zinc-500">Loading…</div>
   }
@@ -170,6 +184,10 @@ export default function DashboardPage() {
 
   const activeJobs = myJobs.filter((j) => j.isActive).length
   const h2 = 'font-serif text-xl font-bold text-zinc-900'
+
+  // applicants grouped under the job they applied to
+  const appsByJob: Record<string, Application[]> = {}
+  for (const a of applications) (appsByJob[a.jobId] ??= []).push(a)
 
   return (
     <div className="min-h-screen bg-white">
@@ -184,15 +202,36 @@ export default function DashboardPage() {
               className="h-16 w-16 rounded-full border border-zinc-200 object-cover"
             />
           )}
+          {isRecruiter && company?.logo && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={company.logo}
+              alt=""
+              className="h-16 w-16 rounded border border-zinc-200 object-contain"
+            />
+          )}
           <div>
             <h1 className="font-serif text-3xl font-bold text-zinc-900">
-              Hello, <span className="text-red-600">{session?.user.name}</span>
+              {isRecruiter && company ? (
+                <>{company.name}</>
+              ) : (
+                <>
+                  Hello, <span className="text-red-600">{session?.user.name}</span>
+                </>
+              )}
             </h1>
             <p className="mt-1 text-zinc-500">
               {isRecruiter
-                ? 'Your job postings and the people who applied'
+                ? `Hello ${session?.user.name}. These are your company's jobs and the people who applied.`
                 : profile?.currentDesignation || 'Your applications'}
-              {!isRecruiter && (
+              {isRecruiter ? (
+                <>
+                  {' · '}
+                  <Link href="/company" className="text-red-600 hover:text-red-700">
+                    Company details
+                  </Link>
+                </>
+              ) : (
                 <>
                   {' · '}
                   <Link href="/profile" className="text-red-600 hover:text-red-700">
@@ -214,6 +253,15 @@ export default function DashboardPage() {
         )}
         {actionError && <Alert variant="error" className="mb-6">{actionError}</Alert>}
 
+        {isRecruiter && !loading && !companyComplete && (
+          <Alert variant="info" className="mb-6">
+            Add your company details before posting jobs.{' '}
+            <Link href="/company" className="font-medium text-red-600 underline">
+              Complete company details
+            </Link>
+          </Alert>
+        )}
+
         {/* upcoming interviews: same block for both roles */}
         {interviews.length > 0 && (
           <section className="mb-12">
@@ -230,117 +278,135 @@ export default function DashboardPage() {
         )}
 
         {isRecruiter ? (
-          <>
-            <section className="mb-12">
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className={h2}>Your job postings</h2>
-                <Link
-                  href="/dashboard/jobs/new"
-                  className="rounded bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
-                >
-                  Post a job
-                </Link>
-              </div>
-              <p className="mb-4 text-sm text-zinc-500">
-                {myJobs.length} postings · {activeJobs} open · {applications.length} applicants in total
-              </p>
-              {loading ? (
-                <p className="text-zinc-500">Loading…</p>
-              ) : myJobs.length === 0 ? (
-                <p className="text-zinc-500">You have not posted any jobs yet.</p>
-              ) : (
-                <div className="divide-y divide-zinc-200 border-y border-zinc-200">
-                  {myJobs.map((job) => (
-                    <div key={job.id} className="flex flex-wrap items-center justify-between gap-3 py-4">
-                      <div>
-                        <p className="font-medium text-zinc-900">{job.title}</p>
-                        <p className="text-sm text-zinc-500">
-                          {job.location} · {job.views} views
-                          {!job.isActive && ' · Closed'}
-                        </p>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-3 text-sm">
-                        <Link
-                          href={`/dashboard/applicants?jobId=${job.id}`}
-                          className="rounded border border-red-200 bg-red-50 px-3 py-1 text-red-700"
-                        >
-                          {job._count?.applications ?? 0} applicants
-                        </Link>
-                        <Link href={`/dashboard/jobs/${job.id}/edit`} className="text-zinc-600 hover:text-red-600">
-                          Edit
-                        </Link>
-                        <button onClick={() => toggleJob(job)} className="text-zinc-600 hover:text-red-600">
-                          {job.isActive ? 'Close' : 'Reopen'}
-                        </button>
-                        <button onClick={() => deleteJob(job)} className="text-zinc-400 hover:text-red-600">
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
+          <section>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className={h2}>Job postings and applicants</h2>
+              <Link
+                href="/dashboard/jobs/new"
+                className="rounded bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
+              >
+                Post a job
+              </Link>
+            </div>
+            <p className="mb-4 text-sm text-zinc-500">
+              {myJobs.length} postings · {activeJobs} open · {applications.length} applicants in total
+              {company ? ` · ${company.members?.length ?? 1} recruiter(s)` : ''}
+            </p>
 
-            <section>
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className={h2}>Latest applicants</h2>
-                <Link href="/dashboard/applicants" className="text-sm font-medium text-red-600 hover:text-red-700">
-                  See all →
-                </Link>
-              </div>
-              {loading ? (
-                <p className="text-zinc-500">Loading…</p>
-              ) : applications.length === 0 ? (
-                <p className="text-zinc-500">No one has applied to your jobs yet.</p>
-              ) : (
-                <div className="divide-y divide-zinc-200 border-y border-zinc-200">
-                  {applications.slice(0, 8).map((app) => (
-                    <div key={app.id} className="py-4">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
+            {loading ? (
+              <p className="text-zinc-500">Loading…</p>
+            ) : myJobs.length === 0 ? (
+              <p className="text-zinc-500">Your company has not posted any jobs yet.</p>
+            ) : (
+              <div className="space-y-6">
+                {myJobs.map((job) => {
+                  const jobApps = [...(appsByJob[job.id] ?? [])].sort(
+                    (a, b) => (b.aiScore ?? -1) - (a.aiScore ?? -1)
+                  )
+                  const isCollapsed = collapsed.has(job.id)
+
+                  return (
+                    <div key={job.id} className="rounded border border-zinc-200">
+                      <div className="flex flex-wrap items-center justify-between gap-3 bg-zinc-50 px-4 py-3">
                         <div>
-                          <Link
-                            href={`/applications/${app.id}`}
-                            className="font-medium text-zinc-900 hover:text-red-600"
-                          >
-                            {app.applicant?.name}
-                          </Link>{' '}
-                          <span className="text-sm text-zinc-500">· {app.applicant?.email}</span>
+                          <p className="font-medium text-zinc-900">
+                            {job.title}
+                            {!job.isActive && (
+                              <span className="ml-2 rounded border border-zinc-300 px-1.5 py-0.5 text-xs font-normal text-zinc-500">
+                                Closed
+                              </span>
+                            )}
+                          </p>
                           <p className="text-sm text-zinc-500">
-                            {app.job?.title} · Applied {formatDate(app.createdAt)}
+                            {job.location} · {job.views} views
+                            {job.recruiter?.name && ` · Posted by ${job.recruiter.name}`}
                           </p>
                         </div>
-                        <div className="flex items-center gap-3">
-                          {app.aiScore !== null && (
-                            <span className={`text-sm font-semibold ${getMatchScoreColor(app.aiScore)}`}>
-                              {Math.round(app.aiScore)}%
-                            </span>
-                          )}
-                          {app.status === 'WITHDRAWN' ? (
-                            <span className="text-sm text-zinc-500">Withdrawn</span>
-                          ) : (
-                            <select
-                              aria-label="Application status"
-                              value={app.status}
-                              disabled={updatingId === app.id}
-                              onChange={(e) => updateStatus(app.id, e.target.value as ApplicationStatus)}
-                              className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-800 focus:border-red-600 focus:outline-none disabled:opacity-50"
-                            >
-                              {STATUSES.map((s) => (
-                                <option key={s} value={s}>
-                                  {applicationStatusLabels[s]}
-                                </option>
-                              ))}
-                            </select>
-                          )}
+                        <div className="flex flex-wrap items-center gap-3 text-sm">
+                          <Link href={`/dashboard/jobs/${job.id}/edit`} className="text-zinc-600 hover:text-red-600">
+                            Edit
+                          </Link>
+                          <button onClick={() => toggleJob(job)} className="text-zinc-600 hover:text-red-600">
+                            {job.isActive ? 'Close' : 'Reopen'}
+                          </button>
+                          <button onClick={() => deleteJob(job)} className="text-zinc-400 hover:text-red-600">
+                            Delete
+                          </button>
                         </div>
                       </div>
+
+                      <div className="px-4 py-3">
+                        <button
+                          onClick={() => toggleCollapsed(job.id)}
+                          className="text-sm font-medium text-red-600 hover:text-red-700"
+                        >
+                          {isCollapsed ? '▸' : '▾'} {jobApps.length} {jobApps.length === 1 ? 'applicant' : 'applicants'}
+                        </button>
+
+                        {!isCollapsed && (
+                          <div className="mt-2">
+                            {jobApps.length === 0 ? (
+                              <p className="py-2 text-sm text-zinc-500">No one has applied yet.</p>
+                            ) : (
+                              <div className="divide-y divide-zinc-100">
+                                {jobApps.map((app) => (
+                                  <div
+                                    key={app.id}
+                                    className="flex flex-wrap items-center justify-between gap-3 py-3"
+                                  >
+                                    <div>
+                                      <Link
+                                        href={`/applications/${app.id}`}
+                                        className="font-medium text-zinc-900 hover:text-red-600"
+                                      >
+                                        {app.applicant?.name}
+                                      </Link>{' '}
+                                      <span className="text-sm text-zinc-500">· {app.applicant?.email}</span>
+                                      <p className="text-sm text-zinc-500">Applied {formatDate(app.createdAt)}</p>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                      {app.aiScore !== null && (
+                                        <span className={`text-sm font-semibold ${getMatchScoreColor(app.aiScore)}`}>
+                                          {Math.round(app.aiScore)}%
+                                        </span>
+                                      )}
+                                      {app.status === 'WITHDRAWN' ? (
+                                        <span className="text-sm text-zinc-500">Withdrawn</span>
+                                      ) : (
+                                        <select
+                                          aria-label="Application status"
+                                          value={app.status}
+                                          disabled={updatingId === app.id}
+                                          onChange={(e) => updateStatus(app.id, e.target.value as ApplicationStatus)}
+                                          className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-800 focus:border-red-600 focus:outline-none disabled:opacity-50"
+                                        >
+                                          {STATUSES.map((s) => (
+                                            <option key={s} value={s}>
+                                              {applicationStatusLabels[s]}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      )}
+                                      <Link
+                                        href={`/applications/${app.id}`}
+                                        className="text-sm font-medium text-red-600 hover:text-red-700"
+                                      >
+                                        Review →
+                                      </Link>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  ))}
-                </div>
-              )}
-            </section>
-          </>
+                  )
+                })}
+              </div>
+            )}
+          </section>
         ) : (
           <>
             <section className="mb-12">

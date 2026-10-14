@@ -9,10 +9,11 @@ export const registerSchema = z
     email,
     password: z.string().min(6, 'Password must be at least 6 characters'),
     role: z.enum(['JOB_SEEKER', 'RECRUITER']),
-    companyName: z.string().trim().min(2).optional(),
+    companyName: z.string().trim().min(2, 'Company name must be at least 2 characters').optional(),
+    joinCode: z.string().trim().min(4, 'Company code is too short').max(32).optional(),
   })
-  .refine((d) => d.role !== 'RECRUITER' || !!d.companyName, {
-    message: 'Company name is required for recruiters',
+  .refine((d) => d.role !== 'RECRUITER' || !!d.companyName || !!d.joinCode, {
+    message: 'Enter a company name or a company join code',
     path: ['companyName'],
   })
 
@@ -77,7 +78,6 @@ export const profileSchema = z.object({
     .max(MAX_ROLES, `Pick at most ${MAX_ROLES} roles`)
     .refine((roles) => roles.every((r) => ROLES.includes(r)), 'Unknown role selected')
     .optional(),
-  // custom skills are allowed now, the list on the form is only a set of suggestions
   skills: z
     .array(z.string().trim().min(1).max(40, 'A skill name can be at most 40 characters'))
     .max(MAX_SKILLS, `Pick at most ${MAX_SKILLS} skills`)

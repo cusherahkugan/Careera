@@ -62,7 +62,11 @@ export default function JobDetailPage() {
       router.push(`/applications/${data.application.id}`)
     } catch (err) {
       if (axios.isAxiosError(err)) {
-        if (err.response?.data?.needsProfile) return void router.push('/onboarding')
+        if (err.response?.data?.needsProfile) {
+          setError('Please complete your profile first. Taking you there…')
+          setTimeout(() => router.push('/onboarding'), 1200)
+          return
+        }
         if (err.response?.status === 401) return void router.push(`/login?callbackUrl=/jobs/${id}`)
         if (err.response?.status === 409) {
           setError('You already applied to this job.')
@@ -92,18 +96,28 @@ export default function JobDetailPage() {
       </ul>
     )
 
+  const isRecruiter = role === 'RECRUITER'
+
   return (
     <div className="min-h-screen bg-white">
       <Navbar />
       <main className="mx-auto max-w-3xl px-5 py-10">
-        <Link href="/jobs" className="text-sm text-zinc-500 hover:text-red-600">← All jobs</Link>
+        <Link href={isRecruiter ? '/dashboard' : '/jobs'} className="text-sm text-zinc-500 hover:text-red-600">
+          ← {isRecruiter ? 'Dashboard' : 'All jobs'}
+        </Link>
 
         <div className="mb-6 mt-3 flex items-start justify-between gap-4">
-          <div>
-            <h1 className="font-serif text-3xl font-bold text-zinc-900">{job.title}</h1>
-            <p className="mt-1 text-zinc-500">
-              {job.company?.name} · {job.location} · {formatSalary(job.salary)} · {formatRelativeTime(job.createdAt)}
-            </p>
+          <div className="flex items-start gap-4">
+            {job.company?.logo && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={job.company.logo} alt="" className="h-14 w-14 rounded border border-zinc-200 object-contain" />
+            )}
+            <div>
+              <h1 className="font-serif text-3xl font-bold text-zinc-900">{job.title}</h1>
+              <p className="mt-1 text-zinc-500">
+                {job.company?.name} · {job.location} · {formatSalary(job.salary)} · {formatRelativeTime(job.createdAt)}
+              </p>
+            </div>
           </div>
           <span className={`whitespace-nowrap rounded border px-2.5 py-1 text-xs font-medium ${jobTypeColors[job.type] ?? ''}`}>
             {job.type.replace('_', ' ')}
@@ -140,7 +154,21 @@ export default function JobDetailPage() {
           </section>
         )}
 
-        {role !== 'RECRUITER' && job.isActive && (
+        {isRecruiter && (
+          <section className="mt-10 rounded border border-zinc-200 bg-zinc-50 p-6">
+            <p className="text-zinc-700">
+              This is one of your company&apos;s postings{job.recruiter?.name ? `, posted by ${job.recruiter.name}` : ''}.
+            </p>
+            <div className="mt-3 flex gap-4 text-sm font-medium">
+              <Link href={`/dashboard/jobs/${job.id}/edit`} className="text-red-600 underline">Edit job</Link>
+              <Link href={`/dashboard/applicants?jobId=${job.id}`} className="text-red-600 underline">
+                View applicants
+              </Link>
+            </div>
+          </section>
+        )}
+
+        {!isRecruiter && job.isActive && (
           <section className="mt-10 rounded border border-zinc-200 bg-zinc-50 p-6">
             {applicationId ? (
               <p className="text-zinc-700">

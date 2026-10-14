@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
 import { z } from 'zod'
-import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { isCompanyComplete, newJoinCode, recruiterContext } from '@/lib/company'
+
+const MAX_LOGO_CHARS = 300_000
 
 const optionalUrl = z
   .string()
@@ -11,41 +12,71 @@ const optionalUrl = z
   .optional()
   .or(z.literal(''))
 
+const logoField = z
+  .string()
+  .trim()
+  .refine(
+    (v) =>
+      v === '' ||
+      /^https?:\/\//i.test(v) ||
+      (/^data:image\/(jpeg|png|webp);base64,/.test(v) && v.length <= MAX_LOGO_CHARS),
+    'Logo must be a PNG, JPEG or WebP image under 200 KB'
+  )
+  .optional()
+
 const companySchema = z.object({
   name: z.string().trim().min(2, 'Company name must be at least 2 characters').max(100),
   website: optionalUrl,
-  logo: optionalUrl,
-  industry: z.string().trim().max(100).optional(),
+  logo: logoField,
+  industry: z.string().trim().min(1, 'Industry is required').max(100),
   size: z.string().trim().max(50).optional(),
-  location: z.string().trim().max(100).optional(),
-  description: z.string().trim().max(2000, 'Description must be 2000 characters or less').optional(),
+  location: z.string().trim().min(1, 'Company location is required').max(100),
+  description: z
+    .string()
+    .trim()
+    .min(20, 'Tell candidates a little about the company (at least 20 characters)')
+    .max(2000, 'Description must be 2000 characters or less'),
 })
 
 const nullable = (v: string | undefined) => (v === undefined ? undefined : v.trim() === '' ? null : v.trim())
 
-// GET /api/company - the recruiter's own company
+// GET /api/company - the recruiter's own company, its recruiters and its join code
 export async function GET() {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user || session.user.role !== 'RECRUITER') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const ctx = await recruiterContext()
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (!ctx.companyId) return NextResponse.json({ company: null, complete: false })
+
+    let company = await prisma.company.findUnique({
+      where: { id: ctx.companyId },
+      include: {
+        members: { select: { id: true, name: true, email: true }, orderBy: { createdAt: 'asc' } },
+      },
+    })
+    if (!company) return NextResponse.json({ company: null, complete: false })
+
+    if (!company.joinCode) {
+      await prisma.company.update({ where: { id: company.id }, data: { joinCode: newJoinCode() } })
+      company = await prisma.company.findUnique({
+        where: { id: ctx.companyId },
+        include: {
+          members: { select: { id: true, name: true, email: true }, orderBy: { createdAt: 'asc' } },
+        },
+      })
     }
 
-    const company = await prisma.company.findUnique({ where: { userId: session.user.id } })
-    return NextResponse.json({ company })
+    return NextResponse.json({ company, complete: isCompanyComplete(company!) })
   } catch (error) {
     console.error('Company fetch error:', error)
     return NextResponse.json({ error: 'Failed to load company' }, { status: 500 })
   }
 }
 
-// PUT /api/company - create or update the recruiter's company
+// PUT /api/company - save the company details (any recruiter of that company)
 export async function PUT(req: Request) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user || session.user.role !== 'RECRUITER') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const ctx = await recruiterContext()
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const input = companySchema.parse(await req.json())
     const data = {
@@ -58,13 +89,17 @@ export async function PUT(req: Request) {
       description: nullable(input.description),
     }
 
-    const company = await prisma.company.upsert({
-      where: { userId: session.user.id },
-      update: data,
-      create: { userId: session.user.id, ...data },
-    })
+    let company
+    if (ctx.companyId) {
+      company = await prisma.company.update({ where: { id: ctx.companyId }, data })
+    } else {
+      company = await prisma.company.create({
+        data: { userId: ctx.userId, joinCode: newJoinCode(), ...data },
+      })
+      await prisma.user.update({ where: { id: ctx.userId }, data: { companyId: company.id } })
+    }
 
-    return NextResponse.json({ company })
+    return NextResponse.json({ company, complete: isCompanyComplete(company) })
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: error.errors[0]?.message ?? 'Invalid input' }, { status: 400 })

@@ -1,26 +1,18 @@
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { Prisma, ApplicationStatus } from '@prisma/client'
 import { z } from 'zod'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { getCompanyId } from '@/lib/company'
 import { rankJobsWithAI } from '@/lib/ai'
 import { describeLocalMatch, localMatch, type CandidateProfile } from '@/lib/recommend'
 import { logEvent, notify } from '@/lib/notify'
 import { applicationSchema } from '@/lib/validations'
 
-const SCORING_TIMEOUT_MS = 6000
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
-  ])
-}
-
 // GET /api/applications
 //  - JOB_SEEKER: the applications they submitted
-//  - RECRUITER:  applications received on jobs they posted (with applicant details)
+//  - RECRUITER:  applications received on ALL jobs of their company
 export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions)
@@ -34,9 +26,14 @@ export async function GET(req: Request) {
     const status = searchParams.get('status')
     const jobId = searchParams.get('jobId')
 
-    const where: Prisma.ApplicationWhereInput = isRecruiter
-      ? { job: { recruiterId: session.user.id } }
-      : { applicantId: session.user.id }
+    let where: Prisma.ApplicationWhereInput
+    if (isRecruiter) {
+      const companyId = await getCompanyId(session.user.id)
+      if (!companyId) return NextResponse.json({ applications: [] })
+      where = { job: { companyId } }
+    } else {
+      where = { applicantId: session.user.id }
+    }
 
     if (status && Object.values(ApplicationStatus).includes(status as ApplicationStatus)) {
       where.status = status as ApplicationStatus
@@ -46,7 +43,12 @@ export async function GET(req: Request) {
     const applications = await prisma.application.findMany({
       where,
       include: {
-        job: { include: { company: { select: { name: true, logo: true } } } },
+        job: {
+          include: {
+            company: { select: { name: true } },
+            ...(isRecruiter && { recruiter: { select: { name: true } } }),
+          },
+        },
         interviews: { orderBy: { scheduledAt: 'asc' } },
         ...(isRecruiter && {
           applicant: {
@@ -74,7 +76,10 @@ export async function GET(req: Request) {
   }
 }
 
-// POST /api/applications - apply for a job
+// POST /api/applications - apply for a job (job seekers only)
+// The application is saved right away with the local match score, so it can
+// never hang or fail because of email / AI problems. Emails, notifications and
+// the AI re-score run afterwards in the background.
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions)
@@ -92,7 +97,10 @@ export async function POST(req: Request) {
       prisma.application.findUnique({
         where: { jobId_applicantId: { jobId: data.jobId, applicantId: session.user.id } },
       }),
-      prisma.job.findUnique({ where: { id: data.jobId } }),
+      prisma.job.findUnique({
+        where: { id: data.jobId },
+        include: { company: { select: { name: true } } },
+      }),
       prisma.profile.findUnique({ where: { userId: session.user.id } }),
     ])
 
@@ -107,13 +115,11 @@ export async function POST(req: Request) {
     }
     if (!profile || !profile.onboardingCompleted) {
       return NextResponse.json(
-        { error: 'Complete your profile before applying', needsProfile: true },
+        { error: 'Complete your profile before applying. We will take you there now.', needsProfile: true },
         { status: 400 }
       )
     }
 
-    // Match scoring: local score always works; AI refines it when available.
-    // It must never block or break applying.
     const candidate: CandidateProfile = {
       skills: profile.skills,
       preferredRoles: profile.preferredRoles,
@@ -123,55 +129,65 @@ export async function POST(req: Request) {
       experienceCount: profile.experience.length,
     }
     const local = localMatch(candidate, job)
-    let aiScore: number = local.score
-    let aiNotes: string = describeLocalMatch(job, local)
+    const localNotes = describeLocalMatch(job, local)
 
+    let application
     try {
-      const ranked = await withTimeout(rankJobsWithAI(candidate, [job]), SCORING_TIMEOUT_MS)
-      const result = ranked?.[job.id]
-      if (result) {
-        aiScore = Math.round(0.7 * result.score + 0.3 * local.score)
-        aiNotes = result.analysis || aiNotes
-      }
-    } catch (error) {
-      console.error('AI match scoring skipped:', error)
-    }
-
-    try {
-      const application = await prisma.application.create({
+      application = await prisma.application.create({
         data: {
           jobId: data.jobId,
           applicantId: session.user.id,
           coverLetter: data.coverLetter,
           resumeUrl: data.resumeUrl || profile.resumeUrl || null,
-          aiScore,
-          aiNotes,
+          aiScore: local.score,
+          aiNotes: localNotes,
         },
-        include: { job: { include: { company: true } } },
       })
-
-      const link = `/applications/${application.id}`
-      await logEvent(application.id, 'APPLIED', 'Application submitted')
-      await Promise.all([
-        notify(job.recruiterId, {
-          title: `New application: ${job.title}`,
-          body: `${session.user.name ?? 'A candidate'} applied for ${job.title}. Match score: ${Math.round(aiScore)}%.`,
-          link,
-        }),
-        notify(session.user.id, {
-          title: `Application sent: ${job.title}`,
-          body: `Your application to ${application.job.company.name} was received. We will email you when the status changes.`,
-          link,
-        }),
-      ])
-
-      return NextResponse.json({ application }, { status: 201 })
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         return NextResponse.json({ error: 'You already applied to this job' }, { status: 409 })
       }
       throw error
     }
+
+    await logEvent(application.id, 'APPLIED', 'Application submitted')
+
+    const applicantName = session.user.name ?? 'A candidate'
+    const applicantId = session.user.id
+    const applicationId = application.id
+    const link = `/applications/${applicationId}`
+
+    after(async () => {
+      let score = local.score
+      try {
+        const ranked = await rankJobsWithAI(candidate, [job])
+        const result = ranked?.[job.id]
+        if (result) {
+          score = Math.round(0.7 * result.score + 0.3 * local.score)
+          await prisma.application.update({
+            where: { id: applicationId },
+            data: { aiScore: score, aiNotes: result.analysis || localNotes },
+          })
+        }
+      } catch (error) {
+        console.error('AI match scoring skipped:', error)
+      }
+
+      await Promise.all([
+        notify(job.recruiterId, {
+          title: `New application: ${job.title}`,
+          body: `${applicantName} applied for ${job.title}. Match score: ${Math.round(score)}%.`,
+          link,
+        }),
+        notify(applicantId, {
+          title: `Application sent: ${job.title}`,
+          body: `Your application to ${job.company.name} was received. We will email you when the status changes.`,
+          link,
+        }),
+      ])
+    })
+
+    return NextResponse.json({ application }, { status: 201 })
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: 'Invalid input', details: error.errors }, { status: 400 })
