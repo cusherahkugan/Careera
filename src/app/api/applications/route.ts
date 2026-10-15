@@ -7,7 +7,7 @@ import { prisma } from '@/lib/prisma'
 import { getCompanyId } from '@/lib/company'
 import { rankJobsWithAI } from '@/lib/ai'
 import { describeLocalMatch, localMatch, type CandidateProfile } from '@/lib/recommend'
-import { logEvent, notify } from '@/lib/notify'
+import { logEvent, notify, notifyCompany } from '@/lib/notify'
 import { applicationSchema } from '@/lib/validations'
 
 // GET /api/applications
@@ -127,6 +127,9 @@ export async function POST(req: Request) {
       headline: profile.headline,
       resumeText: profile.resumeText,
       experienceCount: profile.experience.length,
+      experienceTitles: profile.experience
+        .map((e) => (e as { title?: string } | null)?.title ?? '')
+        .filter(Boolean),
     }
     const local = localMatch(candidate, job)
     const localNotes = describeLocalMatch(job, local)
@@ -174,7 +177,8 @@ export async function POST(req: Request) {
       }
 
       await Promise.all([
-        notify(job.recruiterId, {
+        // every recruiter of the company hears about the application
+        notifyCompany(job.companyId, {
           title: `New application: ${job.title}`,
           body: `${applicantName} applied for ${job.title}. Match score: ${Math.round(score)}%.`,
           link,

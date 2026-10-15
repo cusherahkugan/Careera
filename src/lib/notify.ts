@@ -8,6 +8,8 @@ const appUrl = () =>
 const esc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
+type Payload = { title: string; body: string; link?: string; attachments?: Attachment[] }
+
 function renderEmail(name: string, n: { title: string; body: string; link?: string }) {
   const url = n.link ? `${appUrl()}${n.link}` : null
   return `<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#27272a;padding:24px">
@@ -28,10 +30,7 @@ function renderEmail(name: string, n: { title: string; body: string; link?: stri
  * Creates the in-app notification AND emails the user. Never throws, so it is
  * safe to call from any API route after the main work succeeded.
  */
-export async function notify(
-  userId: string,
-  n: { title: string; body: string; link?: string; attachments?: Attachment[] }
-) {
+export async function notify(userId: string, n: Payload) {
   try {
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -52,6 +51,23 @@ export async function notify(
     })
   } catch (error) {
     console.error('notify failed:', error)
+  }
+}
+
+/** Notifies every recruiter of a company (in-app + email). Never throws. */
+export async function notifyCompany(companyId: string, n: Payload, excludeUserId?: string) {
+  try {
+    const members = await prisma.user.findMany({
+      where: {
+        companyId,
+        role: 'RECRUITER',
+        ...(excludeUserId ? { id: { not: excludeUserId } } : {}),
+      },
+      select: { id: true },
+    })
+    await Promise.all(members.map((m) => notify(m.id, n)))
+  } catch (error) {
+    console.error('notifyCompany failed:', error)
   }
 }
 

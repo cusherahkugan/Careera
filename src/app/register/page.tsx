@@ -93,14 +93,14 @@ function RegisterForm() {
     })
 
     if (!result || result.error) {
-      router.push('/login')
+      window.location.assign('/login')
       return
     }
 
-    // seekers finish their profile first; recruiters go on to fill in the company details
-    if (!isRecruiter) router.push('/onboarding')
-    else router.push(companyMode === 'new' ? '/company' : '/dashboard')
-    router.refresh()
+    // seekers finish their profile first; recruiters go on to fill in the company details.
+    // Full page load so the new session is used everywhere.
+    if (!isRecruiter) window.location.assign('/onboarding')
+    else window.location.assign(companyMode === 'new' ? '/company' : '/dashboard')
   }
 
   const toggleBtn = (active: boolean) =>

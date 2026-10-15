@@ -100,8 +100,18 @@ function NotificationBell() {
 export function Navbar() {
   const { data: session, status } = useSession()
   const role = session?.user.role
+  const isRecruiter = role === 'RECRUITER'
+  const loggedIn = status === 'authenticated' && !!session
+  const visitor = status === 'unauthenticated'
 
   const link = 'text-zinc-600 hover:text-red-600'
+
+  // Hard navigation clears Next's client router cache, so no logged-in page
+  // can be shown from cache after signing out.
+  const handleSignOut = async () => {
+    await signOut({ redirect: false })
+    window.location.assign('/')
+  }
 
   return (
     <header className="sticky top-0 z-50 border-b border-zinc-200 bg-white">
@@ -109,49 +119,54 @@ export function Navbar() {
         <Link href="/" className="font-serif text-2xl font-bold tracking-tight text-zinc-900">
           Careera<span className="text-red-600">.</span>
         </Link>
+
         <nav className="flex flex-wrap items-center gap-5 text-sm">
-          {/* job seekers (and visitors) browse the job board; recruiters only work with their company */}
-          {role !== 'RECRUITER' && (
-            <Link href="/jobs" className={link}>
-              Jobs
-            </Link>
-          )}
-          <Link href="/companies" className={link}>
-            {role === 'RECRUITER' ? 'Find companies' : 'Companies'}
-          </Link>
-          {status === 'loading' ? null : session ? (
+          {visitor && (
             <>
-              {role === 'RECRUITER' ? (
-                <>
-                  <Link href="/dashboard" className={link}>Company dashboard</Link>
-                  <Link href="/dashboard/applicants" className={link}>Applicants</Link>
-                  <Link href="/dashboard/jobs/new" className={link}>Post a job</Link>
-                  <Link href="/company" className={link}>Company profile</Link>
-                </>
-              ) : (
-                <>
-                  <Link href="/dashboard" className={link}>My applications</Link>
-                  <Link href="/profile" className={link}>My profile</Link>
-                </>
-              )}
+              <Link href="/jobs" className={link}>Jobs</Link>
+              <Link href="/companies" className={link}>Companies</Link>
+              <Link href="/register?role=recruiter" className={`${link} hidden sm:inline`}>For employers</Link>
+              <Link href="/login" className={link}>Sign in</Link>
+              <Link
+                href="/register"
+                className="rounded bg-red-600 px-4 py-2 font-medium text-white hover:bg-red-700"
+              >
+                Join free
+              </Link>
+            </>
+          )}
+
+          {loggedIn && !isRecruiter && (
+            <>
+              <Link href="/jobs" className={link}>Jobs</Link>
+              <Link href="/companies" className={link}>Companies</Link>
+              <Link href="/dashboard" className={link}>My applications</Link>
+              <Link href="/profile" className={link}>My profile</Link>
+            </>
+          )}
+
+          {loggedIn && isRecruiter && (
+            <>
+              <Link href="/dashboard" className={link}>Company dashboard</Link>
+              <Link href="/dashboard/applicants" className={link}>Applicants</Link>
+              <Link href="/dashboard/jobs/new" className={link}>Post a job</Link>
+              <Link href="/company" className={link}>Company profile</Link>
+            </>
+          )}
+
+          {loggedIn && (
+            <>
               <NotificationBell />
               <Link href="/settings" className="hidden text-zinc-400 hover:text-red-600 sm:inline">
-                {session.user.name}
+                {session?.user.name}
                 <span className="ml-2 rounded border border-zinc-200 px-1.5 py-0.5 text-xs text-zinc-500">
-                  {role === 'RECRUITER' ? 'Recruiter' : 'Job seeker'}
+                  {isRecruiter ? 'Recruiter' : 'Job seeker'}
                 </span>
               </Link>
-              <button onClick={() => signOut({ callbackUrl: '/' })} className={link}>
+              <button onClick={handleSignOut} className={link}>
                 Sign out
               </button>
             </>
-          ) : (
-            <Link
-              href="/login"
-              className="rounded bg-red-600 px-4 py-2 font-medium text-white hover:bg-red-700"
-            >
-              Sign in
-            </Link>
           )}
         </nav>
       </div>

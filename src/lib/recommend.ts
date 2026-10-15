@@ -1,5 +1,5 @@
-// Local (no API key needed) job scoring. It runs on every active job, then the
-// best candidates are re-scored by the AI in ai.ts.
+// Local (no API key needed) job scoring. It runs on every active job; the best
+// candidates are then re-scored with embeddings and an LLM (see ai.ts).
 
 export interface CandidateProfile {
   skills: string[]
@@ -8,6 +8,8 @@ export interface CandidateProfile {
   headline?: string | null
   resumeText?: string | null
   experienceCount: number
+  /** job titles from the candidate's work history */
+  experienceTitles?: string[]
 }
 
 export interface JobForMatching {
@@ -21,10 +23,21 @@ export interface JobForMatching {
 export interface LocalMatch {
   score: number
   matchedSkills: string[]
+  missingSkills: string[]
   roleMatch: boolean
+  /** 0-1: how much of the candidate's profile vocabulary appears in the job */
+  similarity: number
 }
 
-const STOP_WORDS = new Set(['senior', 'junior', 'lead', 'the', 'and', 'for', 'engineer', 'developer'])
+const STOP_WORDS = new Set([
+  'senior', 'junior', 'lead', 'engineer', 'developer', 'the', 'and', 'for', 'with', 'you', 'your',
+  'our', 'are', 'will', 'have', 'has', 'from', 'this', 'that', 'who', 'what', 'work', 'working',
+  'team', 'teams', 'experience', 'years', 'year', 'strong', 'ability', 'skills', 'skill',
+  'knowledge', 'good', 'great', 'including', 'etc', 'such', 'using', 'use', 'new', 'join',
+  'role', 'job', 'looking', 'seeking', 'we', 'to', 'of', 'in', 'on', 'at', 'as', 'an', 'is', 'be',
+  'or', 'by', 'it', 'its', 'about', 'more', 'also', 'can', 'all', 'any', 'their', 'them', 'they',
+  'across', 'into', 'out', 'high', 'quality', 'help', 'build', 'make', 'based', 'within', 'js',
+])
 
 const ALIASES: Record<string, string> = {
   postgres: 'postgresql',
@@ -39,6 +52,13 @@ const ALIASES: Record<string, string> = {
   mongo: 'mongodb',
   cicd: 'cicd',
   continuousintegration: 'cicd',
+  reactjs: 'react',
+  nodejs: 'node',
+  nextjs: 'next',
+  vuejs: 'vue',
+  ts: 'typescript',
+  py: 'python',
+  ml: 'machinelearning',
 }
 
 /** "Node.js" / "NodeJS" / "node js" -> "node"; "Tailwind CSS" -> "tailwind" */
@@ -52,32 +72,67 @@ function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
 }
 
+/** Everyday English words that are also skill names: only match with exact capitalisation. */
+const AMBIGUOUS = new Set(['go', 'swift', 'express', 'excel', 'sales', 'r', 'c', 'rust', 'spring'])
+
 /** Whole-word match, so "Go" does not match "google" and "Java" does not match "JavaScript". */
 function mentions(text: string, term: string): boolean {
   if (!text || !term) return false
-  const caseSensitive = /^[A-Za-z]{1,3}$/.test(term) // "Go", "C", "R"
+  const caseSensitive = AMBIGUOUS.has(term.toLowerCase())
   const re = new RegExp(`(?<![A-Za-z0-9+#])${escapeRegex(term)}(?![A-Za-z0-9+#])`, caseSensitive ? '' : 'i')
   return re.test(text)
 }
 
-function tokens(s: string): string[] {
+function tokenize(s: string): string[] {
   return s
     .toLowerCase()
     .split(/[^a-z0-9+#]+/)
-    .filter((t) => t.length >= 3 && !STOP_WORDS.has(t))
+    .filter((t) => t.length >= 2 && !STOP_WORDS.has(t))
+    .map((t) => ALIASES[t] ?? t)
+}
+
+/** Weighted vocabulary of the candidate: skills count most, resume words least. */
+function candidateWeights(c: CandidateProfile): Map<string, number> {
+  const m = new Map<string, number>()
+  const add = (text: string, w: number) => {
+    for (const t of new Set(tokenize(text))) m.set(t, (m.get(t) ?? 0) + w)
+  }
+  for (const s of c.skills) add(s, 3)
+  for (const r of c.preferredRoles) add(r, 2)
+  add(c.currentDesignation ?? '', 2)
+  add(c.headline ?? '', 1.5)
+  for (const t of c.experienceTitles ?? []) add(t, 1.5)
+
+  if (c.resumeText) {
+    const counts = new Map<string, number>()
+    for (const t of tokenize(c.resumeText.slice(0, 8000))) counts.set(t, (counts.get(t) ?? 0) + 1)
+    for (const [t, n] of counts) m.set(t, (m.get(t) ?? 0) + Math.min(n * 0.3, 1.5))
+  }
+
+  // keep the 60 most important words so long resumes do not drown the signal
+  return new Map([...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 60))
 }
 
 export function localMatch(candidate: CandidateProfile, job: JobForMatching): LocalMatch {
   const mySkills = new Set(candidate.skills.map(canon))
   const resume = candidate.resumeText ?? ''
+  const jobText = `${job.title} ${job.description} ${job.requirements.join(' ')} ${job.skills.join(' ')}`
 
-  // 3) breadth: how many of the person's skills show up in the job text at all
-  const jobText = `${job.title} ${job.description} ${job.requirements.join(' ')}`
-  const mentionedSkills = candidate.skills.filter((s) => mentions(jobText, s))
-  const breadth = Math.min(mentionedSkills.length / Math.max(Math.min(candidate.skills.length, 8), 1), 1)
+  // 1) vocabulary similarity (profile + resume vs the whole job text)
+  const weights = candidateWeights(candidate)
+  const jobTokens = new Set(tokenize(jobText))
+  let total = 0
+  let found = 0
+  for (const [t, w] of weights) {
+    total += w
+    if (jobTokens.has(t)) found += w
+  }
+  const similarity = total > 0 ? found / total : 0
+  const simScore = Math.min(similarity / 0.5, 1)
 
-  // 1) skills: full credit if listed on the profile, partial if only the resume mentions it
+  // 2) skills: full credit if on the profile, partial if only the resume mentions it
   const matchedSkills: string[] = []
+  const missingSkills: string[] = []
   let skillPoints = 0
   for (const skill of job.skills) {
     if (mySkills.has(canon(skill))) {
@@ -86,19 +141,26 @@ export function localMatch(candidate: CandidateProfile, job: JobForMatching): Lo
     } else if (resume && mentions(resume, skill)) {
       matchedSkills.push(skill)
       skillPoints += 0.6
+    } else {
+      missingSkills.push(skill)
     }
   }
 
-  // jobs posted without a skills list used to score 0 for everyone -
-  // judge those by which of the candidate's skills the job text mentions
+  // jobs posted without a skills list: judge by which of the candidate's skills the text mentions
   const hasJobSkills = job.skills.length > 0
-  if (!hasJobSkills) matchedSkills.push(...mentionedSkills.slice(0, 8))
+  const mentioned = candidate.skills.filter((s) => mentions(jobText, s))
+  if (!hasJobSkills) matchedSkills.push(...mentioned.slice(0, 8))
+  const breadth = Math.min(mentioned.length / Math.max(Math.min(candidate.skills.length, 8), 1), 1)
   const skillScore = hasJobSkills ? Math.min(skillPoints / job.skills.length, 1) : breadth
 
-  // 2) role: does the title look like something the person wants / does today?
+  // 3) role: does the title look like something the person wants / does today?
   const title = job.title.toLowerCase()
-  const wanted = [...candidate.preferredRoles, candidate.currentDesignation ?? ''].filter(Boolean)
-  const titleTokens = new Set(tokens(job.title))
+  const wanted = [
+    ...candidate.preferredRoles,
+    candidate.currentDesignation ?? '',
+    ...(candidate.experienceTitles ?? []).slice(0, 2),
+  ].filter(Boolean)
+  const titleTokens = new Set(tokenize(job.title))
   let roleScore = 0
   let roleMatch = false
   for (const role of wanted) {
@@ -108,16 +170,16 @@ export function localMatch(candidate: CandidateProfile, job: JobForMatching): Lo
       roleMatch = true
       break
     }
-    const roleTokens = tokens(role)
+    const roleTokens = tokenize(role)
     if (roleTokens.length > 0) {
       const overlap = roleTokens.filter((t) => titleTokens.has(t)).length / roleTokens.length
-      roleScore = Math.max(roleScore, overlap * 0.7)
+      roleScore = Math.max(roleScore, overlap * 0.85)
     }
   }
   if (roleScore >= 0.5) roleMatch = true
 
-  const score = Math.round(100 * (0.6 * skillScore + 0.3 * roleScore + 0.1 * breadth))
-  return { score, matchedSkills, roleMatch }
+  const score = Math.round(100 * (0.5 * skillScore + 0.25 * roleScore + 0.25 * simScore))
+  return { score, matchedSkills, missingSkills: missingSkills.slice(0, 6), roleMatch, similarity }
 }
 
 export function describeLocalMatch(job: JobForMatching, m: LocalMatch): string {
@@ -128,5 +190,8 @@ export function describeLocalMatch(job: JobForMatching, m: LocalMatch): string {
     parts.push(`Mentions ${m.matchedSkills.length} of your skills`)
   }
   if (m.roleMatch) parts.push('fits a role you are looking for')
+  if (m.missingSkills.length > 0 && m.matchedSkills.length > 0) {
+    parts.push(`you could add ${m.missingSkills.slice(0, 3).join(', ')}`)
+  }
   return parts.length > 0 ? parts.join(', ') + '.' : 'Based on your profile.'
 }

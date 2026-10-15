@@ -1,8 +1,9 @@
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import bcrypt from 'bcryptjs'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { newJoinCode } from '@/lib/company'
+import { notify } from '@/lib/notify'
 import { registerSchema } from '@/lib/validations'
 
 export async function POST(req: Request) {
@@ -77,6 +78,23 @@ export async function POST(req: Request) {
         data: { companyId: created.ownedCompany!.id },
       })
       return { id: created.id, email: created.email, name: created.name, role: created.role }
+    })
+
+    // welcome email + in-app notification, sent after the response
+    after(async () => {
+      if (user.role === 'JOB_SEEKER') {
+        await notify(user.id, {
+          title: 'Welcome to Careera',
+          body: 'Your account is ready. Complete your profile and upload your resume so we can recommend jobs that fit you.',
+          link: '/onboarding',
+        })
+      } else {
+        await notify(user.id, {
+          title: 'Welcome to Careera',
+          body: 'Your recruiter account is ready. Complete your company profile, then post your first job.',
+          link: '/company',
+        })
+      }
     })
 
     return NextResponse.json({ user }, { status: 201 })

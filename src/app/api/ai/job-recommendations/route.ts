@@ -2,27 +2,34 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { rankJobsWithAI } from '@/lib/ai'
 import {
-  describeLocalMatch,
-  localMatch,
-  type CandidateProfile,
-} from '@/lib/recommend'
+  aiEnabled,
+  embeddingSimilarity,
+  rankJobs,
+  type EmbedResult,
+  type RankResult,
+} from '@/lib/ai'
+import { describeLocalMatch, localMatch, type CandidateProfile } from '@/lib/recommend'
 
-const AI_CANDIDATES = 15 // only the best local matches are sent to the AI
-const AI_TIMEOUT_MS = 8_000 // never make the dashboard wait longer than this for the AI
-const AI_COOLDOWN_MS = 5 * 60 * 1000 // after an AI failure, skip it for a while
+export const maxDuration = 30
+
+const AI_POOL = 20 // best local matches that get embedding similarity
+const LLM_POOL = 12 // best of those that also get an LLM review
+const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS) || 15_000
+const AI_COOLDOWN_MS = 5 * 60 * 1000 // only after a bad key / no quota
 const CACHE_MS = 10 * 60 * 1000
 const MIN_RESULTS = 5
+const MAX_RESULTS = 12
 
 // Same profile + same jobs within 10 minutes -> reuse the AI answer.
-// Local-only answers are NOT cached, so a fixed API key works immediately.
+// Answers without any AI are NOT cached, so a fixed API key works immediately.
 const cache = new Map<string, { at: number; body: unknown }>()
 let aiDownUntil = 0
+let aiDownReason: string | null = null
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   return new Promise((resolve) => {
-    const t = setTimeout(() => resolve(null), ms)
+    const t = setTimeout(() => resolve(fallback), ms)
     p.then(
       (v) => {
         clearTimeout(t)
@@ -30,20 +37,22 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
       },
       () => {
         clearTimeout(t)
-        resolve(null)
+        resolve(fallback)
       }
     )
   })
 }
 
-// GET /api/ai/job-recommendations
-export async function GET() {
+// GET /api/ai/job-recommendations[?refresh=1]
+export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions)
 
     if (!session?.user || session.user.role !== 'JOB_SEEKER') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    const refresh = new URL(req.url).searchParams.get('refresh') === '1'
 
     const profile = await prisma.profile.findUnique({
       where: { userId: session.user.id },
@@ -61,7 +70,7 @@ export async function GET() {
         where: { isActive: true },
         include: { company: { select: { name: true, location: true } } },
         orderBy: { createdAt: 'desc' },
-        take: 100,
+        take: 200,
       }),
       prisma.application.findMany({
         where: { applicantId: session.user.id },
@@ -72,9 +81,22 @@ export async function GET() {
     const appliedIds = new Set(applied.map((a) => a.jobId))
     const open = jobs.filter((j) => !appliedIds.has(j.id))
 
+    const enabled = aiEnabled()
+    const base = { totalAnalyzed: open.length, usedResume: !!profile.resumeText, aiEnabled: enabled }
+
+    if (open.length === 0) {
+      return NextResponse.json({
+        ...base,
+        recommendations: [],
+        usedAI: false,
+        aiError: null,
+        message: 'There are no open jobs you have not applied to yet.',
+      })
+    }
+
     const cacheKey = `${session.user.id}:${profile.updatedAt.getTime()}:${open.map((j) => j.id).join(',')}`
     const hit = cache.get(cacheKey)
-    if (hit && Date.now() - hit.at < CACHE_MS) {
+    if (!refresh && hit && Date.now() - hit.at < CACHE_MS) {
       return NextResponse.json(hit.body)
     }
 
@@ -85,44 +107,74 @@ export async function GET() {
       headline: profile.headline,
       resumeText: profile.resumeText,
       experienceCount: profile.experience.length,
+      experienceTitles: profile.experience
+        .map((e) => (e as { title?: string } | null)?.title ?? '')
+        .filter(Boolean),
     }
 
     // 1) cheap local score for every open job
     const scored = open
       .map((job) => {
-        const m = localMatch(candidate, job)
-        return { job, local: m, localScore: m.score }
+        const local = localMatch(candidate, job)
+        return { job, local }
       })
-      .sort((a, b) => b.localScore - a.localScore)
+      .sort((a, b) => b.local.score - a.local.score)
 
-    // 2) let the AI re-score the best ones - but never wait long for it
-    const top = scored.slice(0, AI_CANDIDATES)
-    let ai: Awaited<ReturnType<typeof rankJobsWithAI>> = null
-    if (Date.now() >= aiDownUntil) {
-      ai = await withTimeout(
-        rankJobsWithAI(
-          candidate,
-          top.map(({ job }) => job)
-        ),
-        AI_TIMEOUT_MS
-      )
-      if (!ai) aiDownUntil = Date.now() + AI_COOLDOWN_MS
+    // 2) AI on the best local matches (embeddings + LLM review), never waiting long
+    const pool = scored.slice(0, AI_POOL)
+    let embed: EmbedResult = { scores: null, error: null, fatal: false }
+    let rank: RankResult = { results: null, error: null, fatal: false }
+    let aiError: string | null = null
+
+    if (enabled) {
+      if (Date.now() < aiDownUntil) {
+        aiError = aiDownReason
+      } else {
+        aiDownReason = null
+        ;[embed, rank] = await Promise.all([
+          withTimeout<EmbedResult>(
+            embeddingSimilarity(candidate, pool.map((p) => p.job)),
+            AI_TIMEOUT_MS,
+            { scores: null, error: 'Embedding request timed out', fatal: false }
+          ),
+          withTimeout<RankResult>(
+            rankJobs(candidate, pool.slice(0, LLM_POOL).map((p) => p.job)),
+            AI_TIMEOUT_MS,
+            { results: null, error: 'AI review timed out', fatal: false }
+          ),
+        ])
+
+        const fatal = embed.fatal || rank.fatal
+        if (fatal) {
+          aiDownReason = rank.error || embed.error
+          aiDownUntil = Date.now() + AI_COOLDOWN_MS
+        }
+        if (!embed.scores && !rank.results) aiError = rank.error || embed.error
+      }
     }
 
-    let recommendations = top
-      .map(({ job, local, localScore }) => {
-        const aiResult = ai?.[job.id]
-        const matchScore = aiResult ? Math.round(0.7 * aiResult.score + 0.3 * localScore) : localScore
+    // 3) blend whatever signals are available
+    let recommendations = pool
+      .map(({ job, local }) => {
+        const r = rank.results?.[job.id]
+        const e = embed.scores?.[job.id]
+
+        let score = local.score
+        if (r && e !== undefined) score = 0.4 * r.score + 0.25 * e + 0.35 * local.score
+        else if (r) score = 0.65 * r.score + 0.35 * local.score
+        else if (e !== undefined) score = 0.5 * e + 0.5 * local.score
+
         return {
           ...job,
-          matchScore,
-          matchAnalysis: aiResult?.analysis || describeLocalMatch(job, local),
+          matchScore: Math.round(score),
+          matchAnalysis: r?.analysis || describeLocalMatch(job, local),
           matchedSkills: local.matchedSkills,
+          missingSkills: local.missingSkills,
         }
       })
-      .filter((j) => j.matchScore >= 15)
+      .filter((j) => j.matchScore >= 10)
       .sort((a, b) => b.matchScore - a.matchScore)
-      .slice(0, 10)
+      .slice(0, MAX_RESULTS)
 
     // never leave the seeker with an empty list: pad with the newest openings
     if (recommendations.length < MIN_RESULTS) {
@@ -131,23 +183,27 @@ export async function GET() {
         .filter(({ job }) => !have.has(job.id))
         .sort((a, b) => b.job.createdAt.getTime() - a.job.createdAt.getTime())
         .slice(0, MIN_RESULTS - recommendations.length)
-        .map(({ job, local, localScore }) => ({
+        .map(({ job, local }) => ({
           ...job,
-          matchScore: localScore,
+          matchScore: local.score,
           matchAnalysis: 'New opening you may be interested in.',
           matchedSkills: local.matchedSkills,
+          missingSkills: local.missingSkills,
         }))
       recommendations = [...recommendations, ...fillers]
     }
 
+    const usedAI = !!(rank.results || embed.scores)
     const body = {
+      ...base,
       recommendations,
-      totalAnalyzed: open.length,
-      usedAI: !!ai,
-      usedResume: !!profile.resumeText,
+      usedAI,
+      usedLLM: !!rank.results,
+      usedEmbeddings: !!embed.scores,
+      aiError: usedAI ? null : aiError,
     }
 
-    if (ai) {
+    if (usedAI) {
       cache.set(cacheKey, { at: Date.now(), body })
       if (cache.size > 200) cache.delete(cache.keys().next().value as string)
     }

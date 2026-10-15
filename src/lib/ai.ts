@@ -1,11 +1,21 @@
 import OpenAI from 'openai'
+import { createHash } from 'crypto'
 import type { CandidateProfile, JobForMatching } from '@/lib/recommend'
 
-const openai = process.env.OPENAI_API_KEY
-  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 25_000, maxRetries: 1 })
+const apiKey = process.env.OPENAI_API_KEY?.trim()
+const openai = apiKey
+  ? new OpenAI({
+      apiKey,
+      baseURL: process.env.OPENAI_BASE_URL || undefined,
+      timeout: 30_000,
+      maxRetries: 1,
+    })
   : null
 
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini'
+const EMBED_MODEL = process.env.OPENAI_EMBED_MODEL || 'text-embedding-3-small'
+
+export const aiEnabled = () => !!openai
 
 /** Models sometimes wrap JSON in ```json fences or add text around it - be forgiving. */
 function safeJson<T>(text: string): T {
@@ -18,6 +28,18 @@ function safeJson<T>(text: string): T {
     if (start === -1 || end <= start) throw new Error('No JSON found in the model response')
     return JSON.parse(cleaned.slice(start, end + 1)) as T
   }
+}
+
+/** Short human-readable reason + whether retrying soon is pointless (bad key, no quota). */
+function describeError(error: unknown): { message: string; fatal: boolean } {
+  const e = error as { status?: number; message?: string; code?: string }
+  const status = e?.status
+  if (status === 401 || status === 403) return { message: 'The AI API key was rejected', fatal: true }
+  if (status === 429) {
+    const quota = /quota|billing/i.test(e?.message ?? '') || e?.code === 'insufficient_quota'
+    return { message: quota ? 'The AI account has no remaining quota' : 'The AI service is rate limited', fatal: quota }
+  }
+  return { message: e?.message ? String(e.message).slice(0, 160) : 'AI request failed', fatal: false }
 }
 
 export interface ParsedResume {
@@ -147,22 +169,25 @@ Return match score (0-100) and brief analysis as JSON only.`,
   }
 }
 
+// ---------------------------------------------------------------------------
+// Ranking: LLM scoring of several jobs for one candidate
+// ---------------------------------------------------------------------------
+
+export interface RankResult {
+  results: Record<string, { score: number; analysis: string }> | null
+  error: string | null
+  /** true = do not retry for a while (bad key / no quota) */
+  fatal: boolean
+}
+
 /**
  * Score several jobs against one candidate in a SINGLE request.
  * Jobs are numbered 1..N in the prompt (models mangle long database ids), and
  * the answer is mapped back to the real job ids here.
- * Returns null when there is no API key or the call fails, so callers can
- * fall back to the local scores.
  */
-export async function rankJobsWithAI(
-  candidate: CandidateProfile,
-  jobs: JobForMatching[]
-): Promise<Record<string, { score: number; analysis: string }> | null> {
-  if (!openai) {
-    console.warn('rankJobsWithAI: OPENAI_API_KEY is not set, using local scores only')
-    return null
-  }
-  if (jobs.length === 0) return null
+export async function rankJobs(candidate: CandidateProfile, jobs: JobForMatching[]): Promise<RankResult> {
+  if (!openai) return { results: null, error: 'No OPENAI_API_KEY configured', fatal: false }
+  if (jobs.length === 0) return { results: null, error: null, fatal: false }
 
   const jobLines = jobs
     .map(
@@ -180,7 +205,7 @@ export async function rankJobsWithAI(
       messages: [
         {
           role: 'system',
-          content: `You are a recruiter matching one candidate to numbered job openings. Judge fit from the candidate's skills, preferred roles, current designation and resume.
+          content: `You are an experienced recruiter matching one candidate to numbered job openings. Judge fit from the candidate's skills, preferred roles, current designation, work history and resume. Be realistic: a score of 80+ means an excellent fit, 50-79 a reasonable fit, below 30 a poor fit.
 Return ONLY a JSON object in exactly this shape, with one entry per job:
 {"results": [{"n": 1, "score": 0-100, "analysis": "one short sentence (max 25 words) saying why"}]}
 "n" is the job number from the list.`,
@@ -191,6 +216,7 @@ Return ONLY a JSON object in exactly this shape, with one entry per job:
 Current designation: ${candidate.currentDesignation || 'not given'}
 Preferred roles: ${candidate.preferredRoles.join(', ') || 'not given'}
 Skills: ${candidate.skills.join(', ') || 'none listed'}
+Past job titles: ${(candidate.experienceTitles ?? []).join(', ') || 'not given'}
 Positions held: ${candidate.experienceCount}
 Resume excerpt:
 ${(candidate.resumeText ?? 'No resume uploaded').slice(0, 4000)}
@@ -205,7 +231,7 @@ Return the JSON object only.`,
     })
 
     const content = completion.choices[0]?.message?.content
-    if (!content) return null
+    if (!content) return { results: null, error: 'Empty AI response', fatal: false }
 
     const parsed = safeJson<unknown>(content)
     let list: unknown[] = []
@@ -230,14 +256,120 @@ Return the JSON object only.`,
 
     if (Object.keys(out).length === 0) {
       console.error('Job ranking: model answer had no usable results:', content.slice(0, 300))
-      return null
+      return { results: null, error: 'The AI answer could not be read', fatal: false }
     }
-    return out
+    return { results: out, error: null, fatal: false }
   } catch (error) {
     console.error('Job ranking error:', error)
-    return null
+    const d = describeError(error)
+    return { results: null, error: d.message, fatal: d.fatal }
   }
 }
+
+/** Backwards-compatible wrapper: just the scores, or null. */
+export async function rankJobsWithAI(
+  candidate: CandidateProfile,
+  jobs: JobForMatching[]
+): Promise<Record<string, { score: number; analysis: string }> | null> {
+  return (await rankJobs(candidate, jobs)).results
+}
+
+// ---------------------------------------------------------------------------
+// Embeddings: semantic similarity between a candidate and jobs
+// ---------------------------------------------------------------------------
+
+const embedCache = new Map<string, number[]>()
+const sha = (s: string) => createHash('sha1').update(s).digest('hex')
+
+async function embed(texts: string[]): Promise<number[][]> {
+  if (!openai) throw new Error('No OPENAI_API_KEY configured')
+
+  const out: (number[] | undefined)[] = texts.map((t) => embedCache.get(sha(t)))
+  const missing = out.map((v, i) => (v ? -1 : i)).filter((i) => i >= 0)
+
+  if (missing.length > 0) {
+    const res = await openai.embeddings.create({
+      model: EMBED_MODEL,
+      input: missing.map((i) => texts[i]),
+    })
+    res.data.forEach((d, k) => {
+      const i = missing[k]
+      out[i] = d.embedding
+      embedCache.set(sha(texts[i]), d.embedding)
+    })
+    while (embedCache.size > 3000) {
+      const first = embedCache.keys().next().value
+      if (first === undefined) break
+      embedCache.delete(first)
+    }
+  }
+  return out as number[][]
+}
+
+function cosine(a: number[], b: number[]): number {
+  let dot = 0
+  let na = 0
+  let nb = 0
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i]
+    na += a[i] * a[i]
+    nb += b[i] * b[i]
+  }
+  return na && nb ? dot / Math.sqrt(na * nb) : 0
+}
+
+export interface EmbedResult {
+  /** job id -> 0-100 */
+  scores: Record<string, number> | null
+  error: string | null
+  fatal: boolean
+}
+
+export async function embeddingSimilarity(
+  candidate: CandidateProfile,
+  jobs: JobForMatching[]
+): Promise<EmbedResult> {
+  if (!openai) return { scores: null, error: 'No OPENAI_API_KEY configured', fatal: false }
+  if (jobs.length === 0) return { scores: null, error: null, fatal: false }
+
+  const candidateText = [
+    `Current role: ${candidate.currentDesignation ?? ''}`,
+    `Looking for: ${candidate.preferredRoles.join(', ')}`,
+    `Headline: ${candidate.headline ?? ''}`,
+    `Skills: ${candidate.skills.join(', ')}`,
+    `Past roles: ${(candidate.experienceTitles ?? []).join(', ')}`,
+    (candidate.resumeText ?? '').slice(0, 3000),
+  ].join('\n')
+
+  const jobTexts = jobs.map((j) =>
+    [
+      `Job: ${j.title}`,
+      `Skills: ${j.skills.join(', ')}`,
+      `Requirements: ${j.requirements.slice(0, 8).join('; ')}`,
+      j.description.slice(0, 1500),
+    ].join('\n')
+  )
+
+  try {
+    const vectors = await embed([candidateText, ...jobTexts])
+    const [cand, ...rest] = vectors
+    const scores: Record<string, number> = {}
+    jobs.forEach((j, i) => {
+      // cosine of related texts is typically 0.2-0.6 for this model
+      const c = cosine(cand, rest[i])
+      scores[j.id] = Math.max(0, Math.min(100, ((c - 0.15) / 0.4) * 100))
+    })
+    return { scores, error: null, fatal: false }
+  } catch (error) {
+    console.error('Embedding error:', error)
+    const d = describeError(error)
+    return { scores: null, error: d.message, fatal: d.fatal }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Other AI helpers
+// ---------------------------------------------------------------------------
 
 export async function generateJobDescription(
   title: string,
@@ -253,7 +385,7 @@ export async function generateJobDescription(
         {
           role: 'system',
           content:
-            'You are a professional job description writer. Create compelling, clear job descriptions.',
+            'You are a professional job description writer. Create compelling, clear job descriptions in plain text (no markdown symbols).',
         },
         {
           role: 'user',

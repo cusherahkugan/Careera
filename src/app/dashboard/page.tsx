@@ -18,7 +18,22 @@ import {
 } from '@/lib/utils'
 import type { Application, ApplicationStatus, Company, Interview, Job, Profile } from '@/types'
 
-type Recommendation = Job & { matchScore: number; matchAnalysis: string; matchedSkills?: string[] }
+type Recommendation = Job & {
+  matchScore: number
+  matchAnalysis: string
+  matchedSkills?: string[]
+  missingSkills?: string[]
+}
+
+type RecInfo = {
+  usedAI: boolean
+  usedLLM?: boolean
+  usedEmbeddings?: boolean
+  usedResume: boolean
+  aiEnabled: boolean
+  aiError: string | null
+  message?: string
+}
 
 const STATUSES: ApplicationStatus[] = ['PENDING', 'REVIEWED', 'INTERVIEW', 'ACCEPTED', 'REJECTED']
 
@@ -40,7 +55,7 @@ export default function DashboardPage() {
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [recError, setRecError] = useState('')
   const [recLoading, setRecLoading] = useState(false)
-  const [recInfo, setRecInfo] = useState<{ usedAI: boolean; usedResume: boolean } | null>(null)
+  const [recInfo, setRecInfo] = useState<RecInfo | null>(null)
 
   const [updatingId, setUpdatingId] = useState<string | null>(null)
   const [actionError, setActionError] = useState('')
@@ -103,26 +118,41 @@ export default function DashboardPage() {
     if (status === 'authenticated' && role) loadData()
   }, [status, role, loadData])
 
-  const loadRecommendations = useCallback(async () => {
-    setRecError('')
-    setRecLoading(true)
-    try {
-      const { data } = await axios.get('/api/ai/job-recommendations')
-      setRecommendations(data.recommendations)
-      setRecInfo({ usedAI: data.usedAI, usedResume: data.usedResume })
-      if (data.recommendations.length === 0) {
-        setRecError('No strong matches yet. Try adding more skills or roles to your profile.')
+  const loadRecommendations = useCallback(
+    async (refresh = false) => {
+      setRecError('')
+      setRecLoading(true)
+      try {
+        const { data } = await axios.get('/api/ai/job-recommendations', {
+          params: refresh ? { refresh: 1 } : undefined,
+        })
+        setRecommendations(data.recommendations ?? [])
+        setRecInfo({
+          usedAI: !!data.usedAI,
+          usedLLM: data.usedLLM,
+          usedEmbeddings: data.usedEmbeddings,
+          usedResume: !!data.usedResume,
+          aiEnabled: !!data.aiEnabled,
+          aiError: data.aiError ?? null,
+          message: data.message,
+        })
+        if ((data.recommendations ?? []).length === 0) {
+          setRecError(
+            data.message || 'No strong matches yet. Try adding more skills or roles to your profile.'
+          )
+        }
+      } catch (err) {
+        if (axios.isAxiosError(err) && err.response?.data?.needsProfile) {
+          router.replace('/onboarding')
+          return
+        }
+        setRecError(errorText(err, 'Could not load recommendations'))
+      } finally {
+        setRecLoading(false)
       }
-    } catch (err) {
-      if (axios.isAxiosError(err) && err.response?.data?.needsProfile) {
-        router.replace('/onboarding')
-        return
-      }
-      setRecError(errorText(err, 'Could not load recommendations'))
-    } finally {
-      setRecLoading(false)
-    }
-  }, [router])
+    },
+    [router]
+  )
 
   useEffect(() => {
     if (role === 'JOB_SEEKER' && profile?.onboardingCompleted) loadRecommendations()
@@ -188,6 +218,18 @@ export default function DashboardPage() {
   // applicants grouped under the job they applied to
   const appsByJob: Record<string, Application[]> = {}
   for (const a of applications) (appsByJob[a.jobId] ??= []).push(a)
+
+  // one honest line about how the matches were produced
+  const recSource = (() => {
+    if (!recInfo) return ''
+    if (recInfo.usedAI) {
+      return recInfo.usedLLM
+        ? ' Scored by AI against your profile and resume.'
+        : ' Ranked with AI similarity against your profile and resume.'
+    }
+    if (!recInfo.aiEnabled) return ' AI scoring is not configured, so these are skill-based matches.'
+    return ` AI scoring is unavailable right now${recInfo.aiError ? ` (${recInfo.aiError})` : ''}, so these are skill-based matches.`
+  })()
 
   return (
     <div className="min-h-screen bg-white">
@@ -413,7 +455,7 @@ export default function DashboardPage() {
               <div className="mb-1 flex items-center justify-between">
                 <h2 className={h2}>Recommended for you</h2>
                 <button
-                  onClick={loadRecommendations}
+                  onClick={() => loadRecommendations(true)}
                   disabled={recLoading}
                   className="rounded border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 hover:border-red-600 hover:text-red-600 disabled:opacity-50"
                 >
@@ -432,7 +474,7 @@ export default function DashboardPage() {
                     for sharper matches.
                   </>
                 )}
-                {recInfo && !recInfo.usedAI && ' (AI scoring is off, showing skill-based matches.)'}
+                {recSource}
               </p>
               {recError && <Alert variant="info" className="mb-4">{recError}</Alert>}
               {recLoading && recommendations.length === 0 && (
@@ -456,10 +498,15 @@ export default function DashboardPage() {
                     </div>
                     <p className="mt-1 text-sm text-zinc-500">{job.matchAnalysis}</p>
                     {job.matchedSkills && job.matchedSkills.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-2">
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
                         {job.matchedSkills.map((s) => (
                           <span key={s} className="rounded bg-red-50 px-2 py-0.5 text-xs text-red-700">
                             {s}
+                          </span>
+                        ))}
+                        {job.missingSkills?.slice(0, 3).map((s) => (
+                          <span key={s} className="rounded border border-dashed border-zinc-300 px-2 py-0.5 text-xs text-zinc-500">
+                            + {s}
                           </span>
                         ))}
                       </div>

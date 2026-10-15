@@ -8,11 +8,22 @@ interface RouteParams {
   params: Promise<{ id: string }>
 }
 
-// GET /api/companies/[id] - public company profile + its OPEN jobs
-// (never exposes the join code or recruiter emails)
+// GET /api/companies/[id] - company profile + its jobs
+//  - visitors / seekers: any company, OPEN jobs only
+//  - recruiters: ONLY their own company (open and closed jobs); other companies are 404
+// Never exposes the join code or recruiter emails.
 export async function GET(_req: Request, context: RouteParams) {
   try {
     const { id } = await context.params
+
+    const session = await getServerSession(authOptions)
+    const isRecruiter = session?.user?.role === 'RECRUITER'
+    const ownCompanyId = isRecruiter ? await getCompanyId(session!.user.id) : null
+
+    if (isRecruiter && ownCompanyId !== id) {
+      return NextResponse.json({ error: 'Company not found' }, { status: 404 })
+    }
+    const isOwn = isRecruiter && ownCompanyId === id
 
     const company = await prisma.company.findUnique({
       where: { id },
@@ -30,7 +41,7 @@ export async function GET(_req: Request, context: RouteParams) {
         description: true,
         specialties: true,
         jobs: {
-          where: { isActive: true },
+          where: isOwn ? {} : { isActive: true },
           orderBy: { createdAt: 'desc' },
           select: {
             id: true,
@@ -39,6 +50,7 @@ export async function GET(_req: Request, context: RouteParams) {
             type: true,
             salary: true,
             skills: true,
+            isActive: true,
             createdAt: true,
           },
         },
@@ -47,11 +59,10 @@ export async function GET(_req: Request, context: RouteParams) {
 
     if (!company) return NextResponse.json({ error: 'Company not found' }, { status: 404 })
 
-    const session = await getServerSession(authOptions)
-    const isOwn =
-      session?.user?.role === 'RECRUITER'
-        ? (await getCompanyId(session.user.id)) === company.id
-        : false
+    // an unfinished company profile is only visible to its own team
+    if (!isOwn && (!company.description || !company.industry)) {
+      return NextResponse.json({ error: 'Company not found' }, { status: 404 })
+    }
 
     return NextResponse.json({ company, isOwn })
   } catch (error) {

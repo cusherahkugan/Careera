@@ -12,6 +12,12 @@ import { formatDateTime } from '@/lib/utils'
 const inputCls =
   'w-full rounded border border-zinc-300 bg-white px-3 py-2.5 text-zinc-900 focus:border-red-600 focus:outline-none focus:ring-1 focus:ring-red-600'
 
+// hard navigation after sign-out so no cached logged-in page can be shown
+async function leave(to: string) {
+  await signOut({ redirect: false })
+  window.location.assign(to)
+}
+
 export default function SettingsPage() {
   const router = useRouter()
   const { data: session, status } = useSession()
@@ -36,7 +42,7 @@ export default function SettingsPage() {
     try {
       await axios.post('/api/account/password', { currentPassword: current, newPassword: next })
       // every session (this one too) was revoked on the server
-      await signOut({ callbackUrl: '/login' })
+      await leave('/login')
     } catch (err) {
       setError(errorText(err, 'Could not change your password'))
       setSaving(false)
@@ -48,7 +54,7 @@ export default function SettingsPage() {
     setRevoking(true)
     try {
       await axios.delete('/api/account/sessions')
-      await signOut({ callbackUrl: '/login' })
+      await leave('/login')
     } catch (err) {
       setError(errorText(err, 'Could not sign out other devices'))
       setRevoking(false)
@@ -88,7 +94,7 @@ export default function SettingsPage() {
             computer or think someone else has access, sign out everywhere.
           </p>
           <div className="flex flex-wrap gap-3">
-            <button onClick={() => signOut({ callbackUrl: '/' })}
+            <button onClick={() => leave('/')}
               className="rounded border border-zinc-300 px-4 py-2 text-sm text-zinc-700 hover:border-red-600 hover:text-red-600">
               Sign out of this device
             </button>

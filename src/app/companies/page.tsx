@@ -26,7 +26,6 @@ export default function CompaniesPage() {
   const [q, setQ] = useState('')
   const [rows, setRows] = useState<Row[]>([])
   const [loading, setLoading] = useState(true)
-  const [lastTerm, setLastTerm] = useState('')
   const [error, setError] = useState('')
 
   const search = useCallback(async (term: string) => {
@@ -35,9 +34,8 @@ export default function CompaniesPage() {
     try {
       const { data } = await axios.get('/api/companies', { params: { q: term || undefined } })
       setRows(data.companies)
-      setLastTerm(term)
     } catch (err) {
-      setError(errorText(err, 'Could not search companies'))
+      setError(errorText(err, 'Could not load companies'))
     } finally {
       setLoading(false)
     }
@@ -45,50 +43,59 @@ export default function CompaniesPage() {
 
   useEffect(() => {
     if (status === 'loading') return
-    const initial = new URLSearchParams(window.location.search).get('q') ?? ''
+    const initial = isRecruiter ? '' : new URLSearchParams(window.location.search).get('q') ?? ''
     setQ(initial)
     search(initial)
-  }, [status, search])
-
-  const needsSearch = isRecruiter && lastTerm.length < 2
+  }, [status, isRecruiter, search])
 
   return (
     <div className="min-h-screen bg-white">
       <Navbar />
       <main className="mx-auto max-w-4xl px-5 py-10">
-        <h1 className="mb-2 font-serif text-3xl font-bold text-zinc-900">Companies</h1>
+        <h1 className="mb-2 font-serif text-3xl font-bold text-zinc-900">
+          {isRecruiter ? 'Your company' : 'Companies'}
+        </h1>
         <p className="mb-6 text-zinc-600">
           {isRecruiter
-            ? 'Search for a company by name, industry or city to see its public profile and open jobs.'
-            : 'Browse companies and see who is hiring.'}
+            ? 'Recruiters see only their own company profile.'
+            : 'Browse every company and see who is hiring.'}
         </p>
 
-        <form
-          onSubmit={(e) => {
-            e.preventDefault()
-            search(q.trim())
-          }}
-          className="mb-8 flex gap-2"
-        >
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Company name, industry or city"
-            className="w-full rounded border border-zinc-300 bg-white px-4 py-3 text-zinc-900 placeholder-zinc-400 focus:border-red-600 focus:outline-none focus:ring-1 focus:ring-red-600"
-          />
-          <button className="rounded bg-red-600 px-6 py-3 font-medium text-white hover:bg-red-700">
-            Search
-          </button>
-        </form>
+        {!isRecruiter && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              search(q.trim())
+            }}
+            className="mb-8 flex gap-2"
+          >
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Company name, industry or city"
+              className="w-full rounded border border-zinc-300 bg-white px-4 py-3 text-zinc-900 placeholder-zinc-400 focus:border-red-600 focus:outline-none focus:ring-1 focus:ring-red-600"
+            />
+            <button className="rounded bg-red-600 px-6 py-3 font-medium text-white hover:bg-red-700">
+              Search
+            </button>
+          </form>
+        )}
 
         {error && <Alert variant="error" className="mb-6">{error}</Alert>}
 
         {loading ? (
-          <p className="text-zinc-500">Searching…</p>
-        ) : needsSearch ? (
-          <p className="text-zinc-500">Type at least 2 characters to find a company.</p>
+          <p className="text-zinc-500">Loading…</p>
         ) : rows.length === 0 ? (
-          <p className="text-zinc-500">No companies found.</p>
+          <p className="text-zinc-500">
+            {isRecruiter ? (
+              <>
+                Your company profile is not set up yet.{' '}
+                <Link href="/company" className="font-medium text-red-600 underline">Add company details</Link>
+              </>
+            ) : (
+              'No companies found.'
+            )}
+          </p>
         ) : (
           <div className="divide-y divide-zinc-200 border-y border-zinc-200">
             {rows.map((c) => (

@@ -25,8 +25,8 @@ export default function LoginPage() {
 
   // already signed in? no reason to see the login form
   useEffect(() => {
-    if (status === 'authenticated') router.replace(safeCallback())
-  }, [status, router])
+    if (status === 'authenticated' && !loading) router.replace(safeCallback())
+  }, [status, loading, router])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -46,15 +46,15 @@ export default function LoginPage() {
         return
       }
 
-      router.push(safeCallback())
-      router.refresh()
+      // full page load: server layouts and the router cache see the new session
+      window.location.assign(safeCallback())
     } catch {
       setError('Something went wrong. Please try again.')
       setLoading(false)
     }
   }
 
-  if (status === 'authenticated') return <div className="min-h-screen bg-zinc-50" />
+  if (status === 'authenticated' && !loading) return <div className="min-h-screen bg-zinc-50" />
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-zinc-50 p-4">
@@ -120,11 +120,13 @@ export default function LoginPage() {
             </Link>
           </p>
 
-          <div className="mt-6 border-t border-zinc-200 pt-4 text-xs text-zinc-500">
-            <p className="mb-2 font-medium text-zinc-600">Demo accounts</p>
-            <p>Job seeker: seeker@example.com / password123</p>
-            <p>Recruiter: recruiter@example.com / password123</p>
-          </div>
+          {process.env.NODE_ENV !== 'production' && (
+            <div className="mt-6 border-t border-zinc-200 pt-4 text-xs text-zinc-500">
+              <p className="mb-2 font-medium text-zinc-600">Demo accounts (dev only)</p>
+              <p>Job seeker: seeker@example.com / password123</p>
+              <p>Recruiter: recruiter@example.com / password123</p>
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -50,14 +50,27 @@ export const authOptions: AuthOptions = {
 
       // every later request: make sure the session was not revoked
       // ("sign out everywhere" / password change bump tokenVersion).
-      // Throwing makes next-auth clear the cookie and treat the user as signed out.
       if (token.id) {
-        const db = await prisma.user.findUnique({
-          where: { id: token.id },
-          select: { tokenVersion: true, role: true },
-        })
-        if (!db || db.tokenVersion !== token.tv) throw new Error('SESSION_REVOKED')
-        token.role = db.role
+        let db: { tokenVersion: number; role: string } | null = null
+        let lookupFailed = false
+
+        try {
+          db = await prisma.user.findUnique({
+            where: { id: token.id },
+            select: { tokenVersion: true, role: true },
+          })
+        } catch (error) {
+          // A database hiccup must not sign everybody out: keep the session
+          // as it is and check again on the next request.
+          lookupFailed = true
+          console.error('Session check skipped (database error):', error)
+        }
+
+        if (!lookupFailed) {
+          // Throwing makes next-auth clear the cookie and treat the user as signed out.
+          if (!db || db.tokenVersion !== token.tv) throw new Error('SESSION_REVOKED')
+          token.role = db.role
+        }
       }
 
       // useSession().update({ name }) after the profile form changes the name
