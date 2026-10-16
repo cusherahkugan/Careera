@@ -26,7 +26,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${inter.className} bg-white text-zinc-800 antialiased`}>
+      <body className={`${inter.className} text-zinc-800 antialiased`}>
+        <div aria-hidden className="app-bg" />
         <Providers session={session}>{children}</Providers>
       </body>
     </html>

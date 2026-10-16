@@ -5,8 +5,38 @@
 }
 
 body {
-  background-color: #fff;
+  background-color: transparent;
   color: #27272a;
+}
+
+/* Site-wide background: careera.jpg stays fixed and covers the viewport while
+   the page scrolls. A fixed layer is used instead of background-attachment:
+   fixed because the latter is unreliable on mobile browsers. Tweak the 0.8
+   alpha to show more or less of the image. */
+.app-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -10;
+  pointer-events: none;
+  background-color: #fff;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.8)),
+    url('/careera.jpg');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* Page wrappers paint opaque backgrounds; let the image show through. */
+.min-h-screen.bg-white,
+.min-h-screen.bg-zinc-50 {
+  background-color: transparent;
+}
+
+/* Sticky navbar: translucent so the image is subtly visible behind it. */
+header.bg-white {
+  background-color: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(6px);
 }
 
 ::selection {
