@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import axios from 'axios'
 import { signOut, useSession } from 'next-auth/react'
-import { formatRelativeTime } from '@/lib/utils'
+import { cn, formatRelativeTime } from '@/lib/utils'
 import type { AppNotification } from '@/types'
 
 function NotificationBell() {
@@ -97,14 +97,55 @@ function NotificationBell() {
   )
 }
 
+/**
+ * A nav link that highlights itself when the current page belongs to it.
+ * `match` lists extra path prefixes that should also count as "active"
+ * (e.g. /applications/... highlights "My applications").
+ * `exact` = only highlight on the exact path (used for /dashboard, which is
+ * the parent of other nav targets).
+ */
+function NavLink({
+  href,
+  pathname,
+  exact = false,
+  match = [],
+  className,
+  children,
+}: {
+  href: string
+  pathname: string
+  exact?: boolean
+  match?: string[]
+  className?: string
+  children: React.ReactNode
+}) {
+  const under = (base: string) => pathname === base || pathname.startsWith(base + '/')
+  const active = exact ? pathname === href || match.some(under) : under(href) || match.some(under)
+
+  return (
+    <Link
+      href={href}
+      aria-current={active ? 'page' : undefined}
+      className={cn(
+        'border-b-2 pb-0.5 transition-colors',
+        active
+          ? 'border-red-600 font-semibold text-red-600'
+          : 'border-transparent text-zinc-600 hover:text-red-600',
+        className
+      )}
+    >
+      {children}
+    </Link>
+  )
+}
+
 export function Navbar() {
   const { data: session, status } = useSession()
+  const pathname = usePathname() ?? ''
   const role = session?.user.role
   const isRecruiter = role === 'RECRUITER'
   const loggedIn = status === 'authenticated' && !!session
   const visitor = status === 'unauthenticated'
-
-  const link = 'text-zinc-600 hover:text-red-600'
 
   // Hard navigation clears Next's client router cache, so no logged-in page
   // can be shown from cache after signing out.
@@ -123,10 +164,15 @@ export function Navbar() {
         <nav className="flex flex-wrap items-center gap-5 text-sm">
           {visitor && (
             <>
-              <Link href="/jobs" className={link}>Jobs</Link>
-              <Link href="/companies" className={link}>Companies</Link>
-              <Link href="/register?role=recruiter" className={`${link} hidden sm:inline`}>For employers</Link>
-              <Link href="/login" className={link}>Sign in</Link>
+              <NavLink href="/jobs" pathname={pathname}>Jobs</NavLink>
+              <NavLink href="/companies" pathname={pathname}>Companies</NavLink>
+              <Link
+                href="/register?role=recruiter"
+                className="hidden border-b-2 border-transparent pb-0.5 text-zinc-600 hover:text-red-600 sm:inline"
+              >
+                For employers
+              </Link>
+              <NavLink href="/login" pathname={pathname}>Sign in</NavLink>
               <Link
                 href="/register"
                 className="rounded bg-red-600 px-4 py-2 font-medium text-white hover:bg-red-700"
@@ -138,32 +184,45 @@ export function Navbar() {
 
           {loggedIn && !isRecruiter && (
             <>
-              <Link href="/jobs" className={link}>Jobs</Link>
-              <Link href="/companies" className={link}>Companies</Link>
-              <Link href="/dashboard" className={link}>My applications</Link>
-              <Link href="/profile" className={link}>My profile</Link>
+              <NavLink href="/jobs" pathname={pathname}>Jobs</NavLink>
+              <NavLink href="/companies" pathname={pathname}>Companies</NavLink>
+              <NavLink href="/dashboard" pathname={pathname} exact match={['/applications']}>
+                My applications
+              </NavLink>
+              <NavLink href="/profile" pathname={pathname}>My profile</NavLink>
             </>
           )}
 
           {loggedIn && isRecruiter && (
             <>
-              <Link href="/dashboard" className={link}>Company dashboard</Link>
-              <Link href="/dashboard/applicants" className={link}>Applicants</Link>
-              <Link href="/dashboard/jobs/new" className={link}>Post a job</Link>
-              <Link href="/company" className={link}>Company profile</Link>
+              <NavLink href="/dashboard" pathname={pathname} exact>Company dashboard</NavLink>
+              <NavLink href="/dashboard/applicants" pathname={pathname} match={['/applications']}>
+                Applicants
+              </NavLink>
+              <NavLink href="/dashboard/jobs/new" pathname={pathname} match={['/dashboard/jobs']}>
+                Post a job
+              </NavLink>
+              <NavLink href="/company" pathname={pathname}>Company profile</NavLink>
             </>
           )}
 
           {loggedIn && (
             <>
               <NotificationBell />
-              <Link href="/settings" className="hidden text-zinc-400 hover:text-red-600 sm:inline">
+              <Link
+                href="/settings"
+                aria-current={pathname === '/settings' ? 'page' : undefined}
+                className={cn(
+                  'hidden sm:inline',
+                  pathname === '/settings' ? 'font-semibold text-red-600' : 'text-zinc-400 hover:text-red-600'
+                )}
+              >
                 {session?.user.name}
                 <span className="ml-2 rounded border border-zinc-200 px-1.5 py-0.5 text-xs text-zinc-500">
                   {isRecruiter ? 'Recruiter' : 'Job seeker'}
                 </span>
               </Link>
-              <button onClick={handleSignOut} className={link}>
+              <button onClick={handleSignOut} className="text-zinc-600 hover:text-red-600">
                 Sign out
               </button>
             </>
