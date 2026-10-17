@@ -1,13 +1,24 @@
 import { z } from 'zod'
 import { MAX_PHOTO_CHARS, MAX_ROLES, MAX_SKILLS, ROLES } from '@/lib/constants'
+import { passwordErrors } from '@/lib/password'
 
 const email = z.string().trim().toLowerCase().email('Invalid email address')
+
+/**
+ * Strict rule set for NEW passwords (register + change password).
+ * Login deliberately keeps a lenient check so existing accounts can still sign in.
+ */
+export const strongPassword = z.string().superRefine((pw, ctx) => {
+  for (const message of passwordErrors(pw)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message })
+  }
+})
 
 export const registerSchema = z
   .object({
     name: z.string().trim().min(2, 'Name must be at least 2 characters'),
     email,
-    password: z.string().min(6, 'Password must be at least 6 characters'),
+    password: strongPassword,
     role: z.enum(['JOB_SEEKER', 'RECRUITER']),
     companyName: z.string().trim().min(2, 'Company name must be at least 2 characters').optional(),
     joinCode: z.string().trim().min(4, 'Company code is too short').max(32).optional(),
@@ -15,6 +26,10 @@ export const registerSchema = z
   .refine((d) => d.role !== 'RECRUITER' || !!d.companyName || !!d.joinCode, {
     message: 'Enter a company name or a company join code',
     path: ['companyName'],
+  })
+  .refine((d) => !d.password.toLowerCase().includes(d.email.split('@')[0].toLowerCase()) || d.email.split('@')[0].length < 4, {
+    message: 'Password cannot contain your email name',
+    path: ['password'],
   })
 
 export const loginSchema = z.object({
@@ -24,7 +39,7 @@ export const loginSchema = z.object({
 
 export const passwordChangeSchema = z.object({
   currentPassword: z.string().min(1, 'Enter your current password'),
-  newPassword: z.string().min(6, 'New password must be at least 6 characters'),
+  newPassword: strongPassword,
 })
 
 const optionalUrl = z.string().url('Invalid URL').optional().or(z.literal(''))

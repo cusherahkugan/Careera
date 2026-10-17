@@ -6,6 +6,8 @@ import Link from 'next/link'
 import axios from 'axios'
 import { signIn, useSession } from 'next-auth/react'
 import { Alert } from '@/components/ui/alert'
+import { PasswordChecklist } from '@/components/password-rules'
+import { passwordErrors } from '@/lib/password'
 
 const inputCls =
   'w-full rounded border border-zinc-300 bg-white px-3 py-2.5 text-zinc-900 placeholder-zinc-400 focus:border-red-600 focus:outline-none focus:ring-1 focus:ring-red-600'
@@ -44,12 +46,18 @@ function RegisterForm() {
     e.preventDefault()
     setError('')
 
-    if (formData.password !== formData.confirmPassword) {
-      setError('Passwords do not match')
+    const pwProblems = passwordErrors(formData.password)
+    if (pwProblems.length > 0) {
+      setError(pwProblems[0])
       return
     }
-    if (formData.password.length < 6) {
-      setError('Password must be at least 6 characters')
+    const emailName = formData.email.split('@')[0].toLowerCase()
+    if (emailName.length >= 4 && formData.password.toLowerCase().includes(emailName)) {
+      setError('Password cannot contain your email name')
+      return
+    }
+    if (formData.password !== formData.confirmPassword) {
+      setError('Passwords do not match')
       return
     }
     if (formData.role === 'RECRUITER') {
@@ -188,7 +196,8 @@ function RegisterForm() {
               <label htmlFor="password" className={labelCls}>Password</label>
               <input id="password" name="password" type="password" autoComplete="new-password"
                 value={formData.password} onChange={handleChange} className={inputCls}
-                placeholder="At least 6 characters" required />
+                placeholder="Create a strong password" required />
+              <PasswordChecklist password={formData.password} />
             </div>
 
             <div>
@@ -196,6 +205,9 @@ function RegisterForm() {
               <input id="confirmPassword" name="confirmPassword" type="password"
                 autoComplete="new-password" value={formData.confirmPassword}
                 onChange={handleChange} className={inputCls} required />
+              {formData.confirmPassword.length > 0 && formData.confirmPassword !== formData.password && (
+                <p className="mt-1 text-xs text-red-600">Passwords do not match</p>
+              )}
             </div>
 
             <button type="submit" disabled={loading}

@@ -6,7 +6,9 @@ import axios from 'axios'
 import { signOut, useSession } from 'next-auth/react'
 import { Navbar } from '@/components/navbar'
 import { Alert } from '@/components/ui/alert'
+import { PasswordChecklist } from '@/components/password-rules'
 import { errorText } from '@/lib/client'
+import { passwordErrors } from '@/lib/password'
 import { formatDateTime } from '@/lib/utils'
 
 const inputCls =
@@ -36,6 +38,10 @@ export default function SettingsPage() {
   const changePassword = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+
+    const problems = passwordErrors(next)
+    if (problems.length > 0) return setError(problems[0])
+    if (next === current) return setError('Choose a different password')
     if (next !== confirm) return setError('New passwords do not match')
 
     setSaving(true)
@@ -113,10 +119,18 @@ export default function SettingsPage() {
           <form onSubmit={changePassword} className="space-y-4">
             <input type="password" placeholder="Current password" autoComplete="current-password"
               value={current} onChange={(e) => setCurrent(e.target.value)} className={inputCls} required />
-            <input type="password" placeholder="New password (min 6 characters)" autoComplete="new-password"
-              value={next} onChange={(e) => setNext(e.target.value)} className={inputCls} required />
-            <input type="password" placeholder="Repeat new password" autoComplete="new-password"
-              value={confirm} onChange={(e) => setConfirm(e.target.value)} className={inputCls} required />
+            <div>
+              <input type="password" placeholder="New password" autoComplete="new-password"
+                value={next} onChange={(e) => setNext(e.target.value)} className={inputCls} required />
+              <PasswordChecklist password={next} />
+            </div>
+            <div>
+              <input type="password" placeholder="Repeat new password" autoComplete="new-password"
+                value={confirm} onChange={(e) => setConfirm(e.target.value)} className={inputCls} required />
+              {confirm.length > 0 && confirm !== next && (
+                <p className="mt-1 text-xs text-red-600">Passwords do not match</p>
+              )}
+            </div>
             <button type="submit" disabled={saving}
               className="rounded bg-red-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50">
               {saving ? 'Saving…' : 'Change password'}
