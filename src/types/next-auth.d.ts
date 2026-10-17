@@ -19,5 +19,7 @@ declare module "next-auth/jwt" {
     id: string
     role: string
     tv: number
+    /** id of the server process that issued this token (see lib/auth.ts) */
+    boot?: string
   }
 }

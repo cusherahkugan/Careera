@@ -3,7 +3,17 @@ import CredentialsProvider from 'next-auth/providers/credentials'
 import bcrypt from 'bcryptjs'
 import { prisma } from '@/lib/prisma'
 
-const SESSION_MAX_AGE = 60 * 60 * 24 * 7 // 7 days
+// Short, sliding session: every session check issues a fresh token, so an
+// active user stays signed in, but a closed browser expires within the hour.
+const SESSION_MAX_AGE = 60 * 60 // 1 hour
+
+// Id of the running server process (set once in next.config.ts). Tokens made
+// by an earlier run carry a different id, so restarting the server signs
+// everyone out. Enforced in development, or in production when
+// LOGOUT_ON_RESTART=true.
+const bootId = () => process.env.APP_BOOT_ID
+const enforceBoot = () =>
+  !!bootId() && (process.env.NODE_ENV !== 'production' || process.env.LOGOUT_ON_RESTART === 'true')
 
 export const authOptions: AuthOptions = {
   providers: [
@@ -45,12 +55,16 @@ export const authOptions: AuthOptions = {
         token.id = user.id
         token.role = user.role
         token.tv = user.tokenVersion ?? 0
+        token.boot = bootId()
         return token
       }
 
       // every later request: make sure the session was not revoked
       // ("sign out everywhere" / password change bump tokenVersion).
       if (token.id) {
+        // the server was restarted since this token was issued
+        if (enforceBoot() && token.boot !== bootId()) throw new Error('SESSION_REVOKED')
+
         let db: { tokenVersion: number; role: string } | null = null
         let lookupFailed = false
 
