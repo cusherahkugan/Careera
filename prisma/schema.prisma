@@ -267,25 +267,32 @@ model Notification {
 }
 
 model ExternalJob {
-  id          String   @id @default(cuid())
-  source      String
-  externalId  String
-  title       String
-  company     String
-  location    String?
-  workMode    String?
-  jobType     String?
-  salary      String?
-  summary     String?  @db.Text
-  tags        String[]
-  url         String
-  postedAt    DateTime?
-  firstSeenAt DateTime @default(now())
-  lastSeenAt  DateTime @default(now())
-  isActive    Boolean  @default(true)
+  id            String    @id @default(cuid())
+  source        String
+  externalId    String
+  title         String
+  company       String
+  careersUrl    String?
+  location      String?
+  workMode      String?
+  jobType       String?
+  roleCategory  String?
+  salary        String?
+  summary       String?   @db.Text
+  requirements  String[]  @default([])
+  contactEmails String[]  @default([])
+  tags          String[]  @default([])
+  url           String
+  postedAt      DateTime?
+  firstSeenAt   DateTime  @default(now())
+  lastSeenAt    DateTime  @default(now())
+  isActive      Boolean   @default(true)
 
   @@unique([source, externalId])
   @@index([isActive, postedAt])
+  @@index([roleCategory])
+  @@index([company])
+  @@index([workMode])
 }
 
 model ExternalJobSyncLog {

@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import axios from 'axios'
@@ -8,11 +8,12 @@ import { signOut, useSession } from 'next-auth/react'
 import { cn, formatRelativeTime } from '@/lib/utils'
 import type { AppNotification } from '@/types'
 
-function NotificationBell() {
+function NotificationBell({ onNavigate }: { onNavigate: () => void }) {
   const router = useRouter()
   const [items, setItems] = useState<AppNotification[]>([])
   const [unread, setUnread] = useState(0)
   const [open, setOpen] = useState(false)
+  const box = useRef<HTMLDivElement>(null)
 
   const load = useCallback(() => {
     axios
@@ -30,8 +31,26 @@ function NotificationBell() {
     return () => clearInterval(timer)
   }, [load])
 
+  // close on outside click / Escape
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (box.current && !box.current.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
   const openItem = async (n: AppNotification) => {
     setOpen(false)
+    onNavigate()
     if (!n.read) {
       await axios.patch('/api/notifications', { id: n.id }).catch(() => {})
       load()
@@ -45,13 +64,14 @@ function NotificationBell() {
   }
 
   return (
-    <div className="relative">
+    <div ref={box} className="relative" onClick={(e) => e.stopPropagation()}>
       <button
         onClick={() => {
           setOpen((o) => !o)
           if (!open) load()
         }}
         aria-label="Notifications"
+        aria-expanded={open}
         className="relative text-zinc-600 hover:text-red-600"
       >
         Alerts
@@ -63,7 +83,7 @@ function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-3 w-80 rounded border border-zinc-200 bg-white shadow-lg">
+        <div className="absolute left-0 z-50 mt-3 w-80 max-w-[calc(100vw-2.5rem)] rounded border border-zinc-200 bg-white shadow-lg md:left-auto md:right-0">
           <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-2">
             <span className="text-sm font-medium text-zinc-800">Notifications</span>
             {unread > 0 && (
@@ -99,10 +119,8 @@ function NotificationBell() {
 
 /**
  * A nav link that highlights itself when the current page belongs to it.
- * `match` lists extra path prefixes that should also count as "active"
- * (e.g. /applications/... highlights "My applications").
- * `exact` = only highlight on the exact path (used for /dashboard, which is
- * the parent of other nav targets).
+ * `match` lists extra path prefixes that should also count as "active".
+ * `exact` = only highlight on the exact path (used for /dashboard).
  */
 function NavLink({
   href,
@@ -142,6 +160,7 @@ function NavLink({
 export function Navbar() {
   const { data: session, status } = useSession()
   const pathname = usePathname() ?? ''
+  const [menuOpen, setMenuOpen] = useState(false)
   const role = session?.user.role
   const isRecruiter = role === 'RECRUITER'
   const loggedIn = status === 'authenticated' && !!session
@@ -156,19 +175,33 @@ export function Navbar() {
 
   return (
     <header className="sticky top-0 z-50 border-b border-zinc-200 bg-white">
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-y-2 px-5 py-4">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between px-5 py-4">
         <Link href="/" className="font-serif text-2xl font-bold tracking-tight text-zinc-900">
           Careera<span className="text-red-600">.</span>
         </Link>
 
-        <nav className="flex flex-wrap items-center gap-5 text-sm">
+        <button
+          type="button"
+          onClick={() => setMenuOpen((o) => !o)}
+          aria-expanded={menuOpen}
+          aria-controls="main-nav"
+          className="rounded border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 md:hidden"
+        >
+          {menuOpen ? 'Close' : 'Menu'}
+        </button>
+
+        <nav
+          id="main-nav"
+          onClick={() => setMenuOpen(false)}
+          className={`${menuOpen ? 'flex' : 'hidden'} w-full flex-col items-start gap-4 pt-4 text-sm md:flex md:w-auto md:flex-row md:items-center md:gap-5 md:pt-0`}
+        >
           {visitor && (
             <>
               <NavLink href="/jobs" pathname={pathname}>Jobs</NavLink>
               <NavLink href="/companies" pathname={pathname}>Companies</NavLink>
               <Link
                 href="/register?role=recruiter"
-                className="hidden border-b-2 border-transparent pb-0.5 text-zinc-600 hover:text-red-600 sm:inline"
+                className="border-b-2 border-transparent pb-0.5 text-zinc-600 hover:text-red-600"
               >
                 For employers
               </Link>
@@ -185,13 +218,13 @@ export function Navbar() {
           {loggedIn && !isRecruiter && (
             <>
               <NavLink href="/jobs" pathname={pathname}>Jobs</NavLink>
+              <NavLink href="/external-jobs" pathname={pathname}>Company openings</NavLink>
               <NavLink href="/companies" pathname={pathname}>Companies</NavLink>
               <NavLink href="/dashboard" pathname={pathname} exact match={['/applications']}>
                 My applications
               </NavLink>
-              <NavLink href="/profile" pathname={pathname}>My profile</NavLink>
               <NavLink href="/calendar" pathname={pathname}>Calendar</NavLink>
-              <NavLink href="/external-jobs" pathname={pathname}>Web jobs</NavLink>
+              <NavLink href="/profile" pathname={pathname}>My profile</NavLink>
             </>
           )}
 
@@ -204,18 +237,18 @@ export function Navbar() {
               <NavLink href="/dashboard/jobs/new" pathname={pathname} match={['/dashboard/jobs']}>
                 Post a job
               </NavLink>
+              <NavLink href="/calendar" pathname={pathname}>Calendar</NavLink>
               <NavLink href="/company" pathname={pathname}>Company profile</NavLink>
             </>
           )}
 
           {loggedIn && (
             <>
-              <NotificationBell />
+              <NotificationBell onNavigate={() => setMenuOpen(false)} />
               <Link
                 href="/settings"
                 aria-current={pathname === '/settings' ? 'page' : undefined}
                 className={cn(
-                  'hidden sm:inline',
                   pathname === '/settings' ? 'font-semibold text-red-600' : 'text-zinc-400 hover:text-red-600'
                 )}
               >

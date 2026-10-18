@@ -19,8 +19,12 @@ export default withAuth(
       }
     }
 
-    // job-seeker-only pages (profile form)
-    if (path.startsWith('/onboarding') || path.startsWith('/profile')) {
+    // job-seeker-only pages
+    if (
+      path.startsWith('/onboarding') ||
+      path.startsWith('/profile') ||
+      path.startsWith('/external-jobs')
+    ) {
       if (token?.role !== 'JOB_SEEKER') {
         return NextResponse.redirect(new URL('/dashboard', req.url))
       }
@@ -45,5 +49,6 @@ export const config = {
     '/applications/:path*',
     '/company/:path*',
     '/calendar/:path*',
+    '/external-jobs/:path*',
   ],
 }
