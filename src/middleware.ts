@@ -44,5 +44,6 @@ export const config = {
     '/settings/:path*',
     '/applications/:path*',
     '/company/:path*',
+    '/calendar/:path*',
   ],
 }

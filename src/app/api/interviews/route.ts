@@ -10,6 +10,7 @@ import { describeInterview, logEvent, notify } from '@/lib/notify'
 import { interviewCreateSchema } from '@/lib/validations'
 
 // GET /api/interviews?upcoming=true
+// GET /api/interviews?from=<ISO>&to=<ISO>   (calendar: every interview in the range)
 //  - seekers: their own interviews
 //  - recruiters: interviews for every job of their company
 export async function GET(req: Request) {
@@ -18,7 +19,20 @@ export async function GET(req: Request) {
     if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const isRecruiter = session.user.role === 'RECRUITER'
-    const upcoming = new URL(req.url).searchParams.get('upcoming') === 'true'
+    const params = new URL(req.url).searchParams
+    const upcoming = params.get('upcoming') === 'true'
+    const fromParam = params.get('from')
+    const toParam = params.get('to')
+
+    let range: { gte: Date; lt: Date } | null = null
+    if (fromParam && toParam) {
+      const from = new Date(fromParam)
+      const to = new Date(toParam)
+      if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from >= to) {
+        return NextResponse.json({ error: 'Invalid date range' }, { status: 400 })
+      }
+      range = { gte: from, lt: to }
+    }
 
     let application: Prisma.ApplicationWhereInput
     if (isRecruiter) {
@@ -30,7 +44,10 @@ export async function GET(req: Request) {
     }
 
     const where: Prisma.InterviewWhereInput = { application }
-    if (upcoming) {
+    if (range) {
+      // calendar view: all statuses within the requested window
+      where.scheduledAt = range
+    } else if (upcoming) {
       where.scheduledAt = { gte: new Date(Date.now() - 2 * 60 * 60 * 1000) }
       where.status = { in: ['SCHEDULED', 'CONFIRMED'] }
     }
@@ -40,13 +57,18 @@ export async function GET(req: Request) {
       include: {
         application: {
           include: {
-            job: { include: { company: { select: { name: true } } } },
+            job: {
+              include: {
+                company: { select: { name: true } },
+                recruiter: { select: { name: true } },
+              },
+            },
             applicant: { select: { id: true, name: true, email: true } },
           },
         },
       },
       orderBy: { scheduledAt: 'asc' },
-      take: 50,
+      take: range ? 200 : 50,
     })
 
     return NextResponse.json({ interviews })

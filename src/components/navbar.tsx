@@ -190,6 +190,7 @@ export function Navbar() {
                 My applications
               </NavLink>
               <NavLink href="/profile" pathname={pathname}>My profile</NavLink>
+              <NavLink href="/calendar" pathname={pathname}>Calendar</NavLink>
             </>
           )}
 
