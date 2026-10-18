@@ -191,6 +191,7 @@ export function Navbar() {
               </NavLink>
               <NavLink href="/profile" pathname={pathname}>My profile</NavLink>
               <NavLink href="/calendar" pathname={pathname}>Calendar</NavLink>
+              <NavLink href="/external-jobs" pathname={pathname}>Web jobs</NavLink>
             </>
           )}
 

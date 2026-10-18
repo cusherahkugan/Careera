@@ -265,3 +265,34 @@ model Notification {
 
   @@index([userId, read])
 }
+
+model ExternalJob {
+  id          String   @id @default(cuid())
+  source      String
+  externalId  String
+  title       String
+  company     String
+  location    String?
+  workMode    String?
+  jobType     String?
+  salary      String?
+  summary     String?  @db.Text
+  tags        String[]
+  url         String
+  postedAt    DateTime?
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+  isActive    Boolean  @default(true)
+
+  @@unique([source, externalId])
+  @@index([isActive, postedAt])
+}
+
+model ExternalJobSyncLog {
+  id        String   @id @default(cuid())
+  ranAt     DateTime @default(now())
+  source    String
+  fetched   Int      @default(0)
+  added     Int      @default(0)
+  error     String?
+}
