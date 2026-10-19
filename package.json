@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "postinstall": "prisma generate",
     "db:push": "prisma db push",
-    "db:seed": "prisma db seed"
+    "db:seed": "prisma db seed",
+    "db:cleanup-external": "tsx prisma/cleanup-external-jobs.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
