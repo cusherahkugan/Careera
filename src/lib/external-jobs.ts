@@ -1,13 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+// External jobs: fetched ONLY from JSearch, English only, IT sector only.
 import { prisma } from '@/lib/prisma'
-import {
-  ATS_LABEL,
-  defaultCareersUrl,
-  getCareerSources,
-  type Ats,
-  type CareerSource,
-} from '@/lib/career-sources'
 import { hasContent, isEnglish } from '@/lib/language'
+import { isITJob } from '@/lib/it-filter'
 
 export const SYNC_EVERY_MS = 6 * 60 * 60 * 1000
 
@@ -49,24 +44,6 @@ export type Normalized = {
   postedAt?: Date
 }
 
-type Feed = {
-  name: string
-  source: string
-  /** externalId prefix that belongs to this feed (used to close removed postings) */
-  prefix: string
-  /** skip this feed if it already ran successfully within this many hours */
-  minHours?: number
-  /** false = jobs not returned this run stay open (search-based feeds like JSearch) */
-  closeMissing?: boolean
-  fetch: () => Promise<Normalized[]>
-}
-
-const envOn = (name: string, fallback: boolean) => {
-  const v = process.env[name]?.trim().toLowerCase()
-  if (!v) return fallback
-  return v === 'true' || v === '1' || v === 'yes'
-}
-
 // ---------------------------------------------------------------------------
 // text helpers
 // ---------------------------------------------------------------------------
@@ -86,7 +63,7 @@ const decode = (s: string) =>
 
 const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-/** HTML (even Greenhouse's double-encoded HTML) or plain text -> clean text, list items become "• ..." lines. */
+/** HTML or plain text -> clean text, list items become "• ..." lines. */
 export function htmlToText(html?: string | null): string {
   if (!html) return ''
   let s = html
@@ -98,7 +75,7 @@ export function htmlToText(html?: string | null): string {
     .replace(/<[^>]+>/g, ' ')
   s = decode(s)
   return s
-    .replace(/^[ \t]*[-*–·▪●]\s+/gm, '• ') // plain-text bullets -> "• "
+    .replace(/^[ \t]*[-*–·▪●]\s+/gm, '• ')
     .replace(/[ \t\u00a0]+/g, ' ')
     .replace(/ *\n */g, '\n')
     .replace(/\n{3,}/g, '\n\n')
@@ -261,7 +238,7 @@ function build(p: {
   }
 }
 
-/** A posting is only saved when it has a real link, a readable description and is in English. */
+/** Saved only with a real link, a readable description and English text. */
 function isGood(j: Normalized): boolean {
   if (!j.title || j.title.length < 3 || !j.company) return false
   if (!/^https?:\/\//i.test(j.url)) return false
@@ -281,186 +258,28 @@ async function getJson(url: string, headers: Record<string, string> = {}) {
   })
   if (!res.ok) {
     const body = (await res.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 150)
-    // host only: never put the full URL (it may contain query text) or headers in the message
+    // host only: never put the full URL (it contains the search text) in the message
     throw new Error(`${new URL(url).host} -> ${res.status} ${body}`)
   }
   return res.json()
 }
 
-const careers = (s: CareerSource) => s.careersUrl ?? defaultCareersUrl(s)
-
 // ---------------------------------------------------------------------------
-// ATS adapters (public job-board APIs of the company career pages)
-// Only used when ATS_SYNC=true
-// ---------------------------------------------------------------------------
-
-async function greenhouse(s: CareerSource): Promise<Normalized[]> {
-  const data = await getJson(
-    `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(s.token)}/jobs?content=true`
-  )
-  return (data.jobs ?? []).map((j: any) =>
-    build({
-      source: 'Greenhouse',
-      id: `${s.token}:${j.id}`,
-      title: j.title,
-      company: s.company,
-      careersUrl: careers(s),
-      location: j.location?.name,
-      html: j.content,
-      url: j.absolute_url,
-      postedAt: toDate(j.first_published ?? j.updated_at),
-      tags: (j.departments ?? []).map((d: any) => d?.name),
-    })
-  )
-}
-
-async function lever(s: CareerSource): Promise<Normalized[]> {
-  const data = await getJson(`https://api.lever.co/v0/postings/${encodeURIComponent(s.token)}?mode=json`)
-  return (Array.isArray(data) ? data : []).map((j: any) => {
-    const lists = (j.lists ?? []).map((l: any) => `<h3>${l.text}</h3><ul>${l.content}</ul>`).join('')
-    const r = j.salaryRange
-    return build({
-      source: 'Lever',
-      id: `${s.token}:${j.id}`,
-      title: j.text,
-      company: s.company,
-      careersUrl: careers(s),
-      location: j.categories?.location ?? (j.categories?.allLocations ?? []).join(', '),
-      mode: j.workplaceType,
-      type: j.categories?.commitment,
-      salary: r?.min ? `${r.currency ?? ''} ${r.min} - ${r.max ?? ''} ${r.interval ?? ''}`.trim() : null,
-      html: `${j.description ?? ''}${lists}${j.additional ?? ''}`,
-      url: j.hostedUrl,
-      postedAt: toDate(j.createdAt),
-      tags: [j.categories?.team, j.categories?.department],
-    })
-  })
-}
-
-async function ashby(s: CareerSource): Promise<Normalized[]> {
-  const data = await getJson(
-    `https://api.ashbyhq.com/posting-api/job-board/${encodeURIComponent(s.token)}?includeCompensation=true`
-  )
-  return (data.jobs ?? []).map((j: any) =>
-    build({
-      source: 'Ashby',
-      id: `${s.token}:${j.id}`,
-      title: j.title,
-      company: s.company,
-      careersUrl: careers(s),
-      location: j.location,
-      mode: j.workplaceType ?? (j.isRemote ? 'Remote' : null),
-      type: j.employmentType,
-      salary: j.compensation?.compensationTierSummary,
-      html: j.descriptionHtml ?? j.descriptionPlain,
-      url: j.jobUrl ?? j.applyUrl,
-      postedAt: toDate(j.publishedAt),
-      tags: [j.department, j.team],
-    })
-  )
-}
-
-async function workable(s: CareerSource): Promise<Normalized[]> {
-  const data = await getJson(
-    `https://apply.workable.com/api/v1/widget/accounts/${encodeURIComponent(s.token)}?details=true`
-  )
-  return (data.jobs ?? []).map((j: any) =>
-    build({
-      source: 'Workable',
-      id: `${s.token}:${j.shortcode}`,
-      title: j.title,
-      company: s.company,
-      careersUrl: careers(s),
-      location: [j.city, j.state, j.country].filter(Boolean).join(', '),
-      mode: j.telecommuting ? 'Remote' : null,
-      type: j.employment_type,
-      html: j.description,
-      url: j.url ?? j.shortlink,
-      postedAt: toDate(j.published_on ?? j.created_at),
-      tags: [j.department],
-    })
-  )
-}
-
-async function recruitee(s: CareerSource): Promise<Normalized[]> {
-  const data = await getJson(`https://${encodeURIComponent(s.token)}.recruitee.com/api/offers/`)
-  return (data.offers ?? []).map((j: any) =>
-    build({
-      source: 'Recruitee',
-      id: `${s.token}:${j.id}`,
-      title: j.title,
-      company: s.company,
-      careersUrl: careers(s),
-      location: j.location ?? [j.city, j.country].filter(Boolean).join(', '),
-      mode: j.remote ? 'Remote' : null,
-      type: j.employment_type_code,
-      html: j.description,
-      requirementsHtml: j.requirements,
-      url: j.careers_url ?? j.url,
-      postedAt: toDate(j.created_at),
-      tags: [j.department],
-    })
-  )
-}
-
-const ADAPTERS: Record<Ats, (s: CareerSource) => Promise<Normalized[]>> = {
-  greenhouse,
-  lever,
-  ashby,
-  workable,
-  recruitee,
-}
-
-// ---------------------------------------------------------------------------
-// job boards / aggregators
+// JSearch
+//   JSEARCH_API_KEY   (required)
+//   JSEARCH_PROVIDER  = rapidapi (default) | openwebninja
+//   JSEARCH_QUERIES   = "query|country;query|country"   e.g. "software developer|lk;devops engineer|us"
+//   JSEARCH_COUNTRY   = default country when a query has none
+//   JSEARCH_PAGES     = pages per query (default 1, max 5)
+//   JSEARCH_MIN_HOURS = minimum hours between runs (default 5)
+//   JSEARCH_KEEP_DAYS = close jobs not seen for this many days (default 21)
 // ---------------------------------------------------------------------------
 
-async function fromRemotive(): Promise<Normalized[]> {
-  const data = await getJson('https://remotive.com/api/remote-jobs?category=software-dev&limit=150')
-  return (data.jobs ?? []).map((j: any) =>
-    build({
-      source: 'Remotive',
-      id: String(j.id),
-      title: j.title,
-      company: j.company_name,
-      location: j.candidate_required_location,
-      mode: 'Remote',
-      type: j.job_type ? String(j.job_type).replace('_', ' ') : null,
-      salary: j.salary,
-      html: j.description,
-      url: j.url,
-      postedAt: toDate(j.publication_date),
-      tags: Array.isArray(j.tags) ? j.tags : [],
-    })
-  )
-}
-
-async function fromArbeitnow(): Promise<Normalized[]> {
-  const data = await getJson('https://www.arbeitnow.com/api/job-board-api')
-  return (data.data ?? []).map((j: any) =>
-    build({
-      source: 'Arbeitnow',
-      id: String(j.slug),
-      title: j.title,
-      company: j.company_name,
-      location: j.location,
-      mode: j.remote ? 'Remote' : null,
-      type: Array.isArray(j.job_types) ? j.job_types.join(', ') : null,
-      html: j.description,
-      url: j.url,
-      postedAt: j.created_at ? toDate(j.created_at * 1000) : null,
-      tags: Array.isArray(j.tags) ? j.tags : [],
-    })
-  )
-}
-
-// ---------------------------------------------------------------------------
-// JSearch (needs JSEARCH_API_KEY)
-//   JSEARCH_PROVIDER = rapidapi (default) | openwebninja
-//   JSEARCH_QUERIES  = "query|country;query|country"   (country optional, e.g. lk, us, gb)
-// ---------------------------------------------------------------------------
-
-function jsearchRequest(query: string, page: number, country: string) {
+function jsearchRequest(
+  query: string,
+  page: number,
+  country: string
+): { url: string; headers: Record<string, string> } {
   const key = process.env.JSEARCH_API_KEY!.trim()
   const provider = (process.env.JSEARCH_PROVIDER || 'rapidapi').trim().toLowerCase()
   const params = new URLSearchParams({
@@ -488,6 +307,12 @@ function jsearchJob(j: any): Normalized | null {
   const url = j.job_apply_link || j.job_google_link
   if (!j.job_id || !j.job_title || !j.employer_name || !url) return null
 
+  const quals: string[] = j.job_highlights?.Qualifications ?? []
+
+  // IT sector only (checked on the FULL description, before it is shortened)
+  const category = categorize(String(j.job_title))
+  if (!isITJob(String(j.job_title), category, `${j.job_description ?? ''} ${quals.join(' ')}`)) return null
+
   const salary =
     j.job_min_salary || j.job_max_salary
       ? [
@@ -500,7 +325,6 @@ function jsearchJob(j: any): Normalized | null {
           .join(' ')
       : null
 
-  const quals: string[] = j.job_highlights?.Qualifications ?? []
   const requirementsHtml = quals.length
     ? `<ul>${quals.map((q) => `<li>${escHtml(String(q))}</li>`).join('')}</ul>`
     : null
@@ -526,76 +350,49 @@ function jsearchJob(j: any): Normalized | null {
   })
 }
 
-async function fromJSearch(): Promise<Normalized[]> {
-  if (!process.env.JSEARCH_API_KEY?.trim()) return []
-
+async function fromJSearch(): Promise<{ rows: number; jobs: Normalized[]; errors: string[] }> {
   const defaultCountry = process.env.JSEARCH_COUNTRY?.trim().toLowerCase() || ''
   const pages = Math.min(Math.max(Number(process.env.JSEARCH_PAGES) || 1, 1), 5)
-  const queries = (process.env.JSEARCH_QUERIES || 'software engineer')
+  const queries = (process.env.JSEARCH_QUERIES || 'software developer')
     .split(';')
     .map((q) => q.trim())
     .filter(Boolean)
 
-  const out: Normalized[] = []
-  const errors: string[] = []
+  // queries run in parallel so the whole sync fits inside the serverless time limit
+  const parts = await Promise.all(
+    queries.map(async (entry) => {
+      const [query, countryOverride] = entry.split('|').map((p) => p.trim())
+      const country = (countryOverride ?? defaultCountry).toLowerCase()
+      const jobs: Normalized[] = []
+      let rows = 0
+      let error: string | null = null
 
-  for (const entry of queries) {
-    const [query, countryOverride] = entry.split('|').map((p) => p.trim())
-    const country = (countryOverride ?? defaultCountry).toLowerCase()
-    for (let page = 1; page <= pages; page++) {
-      try {
-        const req = jsearchRequest(query, page, country)
-        const data = await getJson(req.url, req.headers)
-        const rows: any[] = data.data ?? []
-        for (const row of rows) {
-          const job = jsearchJob(row)
-          if (job) out.push(job)
+      for (let page = 1; page <= pages; page++) {
+        try {
+          const req = jsearchRequest(query, page, country)
+          const data = await getJson(req.url, req.headers)
+          const list: any[] = data.data ?? []
+          rows += list.length
+          for (const row of list) {
+            const job = jsearchJob(row)
+            if (job) jobs.push(job)
+          }
+          if (list.length < 10) break // no more pages for this query
+        } catch (e: any) {
+          error = String(e?.message ?? e)
+          break
         }
-        if (rows.length < 10) break // no more pages for this query
-      } catch (e: any) {
-        errors.push(String(e?.message ?? e))
-        break
       }
-    }
-  }
-
-  // nothing at all and something failed -> report it (partial results are still kept)
-  if (out.length === 0 && errors.length > 0) throw new Error(errors[0])
-  return out
-}
-
-function buildFeeds(): Feed[] {
-  const feeds: Feed[] = []
-
-  if (process.env.JSEARCH_API_KEY?.trim()) {
-    feeds.push({
-      name: 'JSearch',
-      source: 'JSearch',
-      prefix: '',
-      closeMissing: false,
-      minHours: Number(process.env.JSEARCH_MIN_HOURS) || 24, // protects the monthly quota
-      fetch: fromJSearch,
+      return { rows, jobs, error }
     })
-  }
+  )
 
-  if (envOn('ENABLE_REMOTIVE', true)) {
-    feeds.push({ name: 'Remotive', source: 'Remotive', prefix: '', fetch: fromRemotive })
-  }
-  if (envOn('ENABLE_ARBEITNOW', false)) {
-    feeds.push({ name: 'Arbeitnow', source: 'Arbeitnow', prefix: '', fetch: fromArbeitnow })
-  }
+  const errors = parts.map((p) => p.error).filter((e): e is string => !!e)
+  const rows = parts.reduce((n, p) => n + p.rows, 0)
+  const jobs = parts.flatMap((p) => p.jobs)
 
-  if (envOn('ATS_SYNC', false)) {
-    for (const s of getCareerSources()) {
-      feeds.push({
-        name: `${ATS_LABEL[s.ats]}: ${s.company}`,
-        source: ATS_LABEL[s.ats],
-        prefix: `${s.token}:`,
-        fetch: () => ADAPTERS[s.ats](s),
-      })
-    }
-  }
-  return feeds
+  if (jobs.length === 0 && errors.length > 0) throw new Error(errors[0])
+  return { rows, jobs, errors }
 }
 
 // ---------------------------------------------------------------------------
@@ -605,22 +402,13 @@ function buildFeeds(): Feed[] {
 const chunk = <T,>(arr: T[], size: number) =>
   Array.from({ length: Math.ceil(arr.length / size) }, (_, i) => arr.slice(i * size, i * size + size))
 
-async function pool<T>(items: T[], size: number, fn: (t: T) => Promise<void>) {
-  let i = 0
-  await Promise.all(
-    Array.from({ length: Math.min(size, items.length) }, async () => {
-      while (i < items.length) await fn(items[i++])
-    })
-  )
-}
-
-async function persist(feed: Feed, jobs: Normalized[], runStart: Date) {
+async function persist(jobs: Normalized[], runStart: Date) {
   const unique = [...new Map(jobs.map((j) => [j.externalId, j])).values()]
   const have = new Set<string>()
 
   for (const ids of chunk(unique.map((j) => j.externalId), 1000)) {
     const rows = await prisma.externalJob.findMany({
-      where: { source: feed.source, externalId: { in: ids } },
+      where: { source: 'JSearch', externalId: { in: ids } },
       select: { externalId: true },
     })
     rows.forEach((r) => have.add(r.externalId))
@@ -635,26 +423,11 @@ async function persist(feed: Feed, jobs: Normalized[], runStart: Date) {
   }
   for (const ids of chunk([...have], 1000)) {
     await prisma.externalJob.updateMany({
-      where: { source: feed.source, externalId: { in: ids } },
+      where: { source: 'JSearch', externalId: { in: ids } },
       data: { lastSeenAt: runStart, isActive: true },
     })
   }
-
-  let closed = 0
-  if (feed.closeMissing !== false) {
-    // anything of this feed that was NOT seen in this run is gone from the company's page
-    const res = await prisma.externalJob.updateMany({
-      where: {
-        source: feed.source,
-        ...(feed.prefix ? { externalId: { startsWith: feed.prefix } } : {}),
-        isActive: true,
-        lastSeenAt: { lt: runStart },
-      },
-      data: { isActive: false },
-    })
-    closed = res.count
-  }
-  return { added: fresh.length, closed }
+  return { added: fresh.length }
 }
 
 // ---------------------------------------------------------------------------
@@ -669,6 +442,7 @@ export type SyncSummary = {
     { fetched: number; skipped: number; added: number; closed: number; error?: string }
   >
   closedStale: number
+  notes?: string
 }
 
 export function syncExternalJobs(opts: { force?: boolean } = {}): Promise<SyncSummary> {
@@ -681,71 +455,63 @@ export function syncExternalJobs(opts: { force?: boolean } = {}): Promise<SyncSu
 
 async function run(opts: { force?: boolean }): Promise<SyncSummary> {
   const runStart = new Date()
-  const feeds = buildFeeds()
-  const stats = new Map<
-    string,
-    { ran: number; fetched: number; skipped: number; added: number; closed: number; errors: string[] }
-  >()
-  const stat = (src: string) => {
-    if (!stats.has(src))
-      stats.set(src, { ran: 0, fetched: 0, skipped: 0, added: 0, closed: 0, errors: [] })
-    return stats.get(src)!
-  }
+  const day = 24 * 60 * 60 * 1000
+  const results: SyncSummary['results'] = {}
 
-  await pool(feeds, 6, async (feed) => {
-    const st = stat(feed.source)
-    try {
-      if (feed.minHours && !opts.force) {
-        const last = await prisma.externalJobSyncLog.findFirst({
-          where: { source: feed.source, error: null },
-          orderBy: { ranAt: 'desc' },
-        })
-        if (last && Date.now() - last.ranAt.getTime() < feed.minHours * 3_600_000) return
-      }
-      st.ran++
-      const all = await feed.fetch()
-      st.fetched += all.length
-      const good = all.filter(isGood)
-      st.skipped += all.length - good.length
-      if (good.length === 0) return // never wipe a feed because of an empty answer
-      const r = await persist(feed, good, runStart)
-      st.added += r.added
-      st.closed += r.closed
-    } catch (e: any) {
-      st.errors.push(`${feed.name}: ${String(e?.message ?? e).slice(0, 220)}`)
-    }
+  // Only JSearch jobs may be visible: hide anything that came from another source.
+  const hidden = await prisma.externalJob.updateMany({
+    where: { isActive: true, source: { not: 'JSearch' } },
+    data: { isActive: false },
   })
 
-  const results: SyncSummary['results'] = {}
-  for (const [source, st] of stats) {
-    if (st.ran === 0) continue
-    const error = st.errors.length ? st.errors.join(' | ').slice(0, 500) : undefined
-    results[source] = {
-      fetched: st.fetched,
-      skipped: st.skipped,
-      added: st.added,
-      closed: st.closed,
-      error,
-    }
-    await prisma.externalJobSyncLog.create({
-      data: { source, fetched: st.fetched, added: st.added, error: error ?? null },
-    })
+  if (!process.env.JSEARCH_API_KEY?.trim()) {
+    return { results, closedStale: hidden.count, notes: 'JSEARCH_API_KEY is not set' }
   }
 
-  // safety net: feeds that list everything are closed after 3 days unseen,
-  // JSearch (search based) after JSEARCH_KEEP_DAYS
-  const day = 24 * 60 * 60 * 1000
-  const keepDays = Number(process.env.JSEARCH_KEEP_DAYS) || 21
-  const [stale, staleJs] = await Promise.all([
-    prisma.externalJob.updateMany({
-      where: { isActive: true, source: { not: 'JSearch' }, lastSeenAt: { lt: new Date(Date.now() - 3 * day) } },
-      data: { isActive: false },
-    }),
-    prisma.externalJob.updateMany({
-      where: { isActive: true, source: 'JSearch', lastSeenAt: { lt: new Date(Date.now() - keepDays * day) } },
-      data: { isActive: false },
-    }),
-  ])
+  // 5h default (not 6h) so a cron that fires a few minutes early is not skipped
+  const minHours = Number(process.env.JSEARCH_MIN_HOURS) || 5
+  if (!opts.force) {
+    const last = await prisma.externalJobSyncLog.findFirst({
+      where: { source: 'JSearch', error: null },
+      orderBy: { ranAt: 'desc' },
+    })
+    if (last && Date.now() - last.ranAt.getTime() < minHours * 3_600_000) {
+      const ago = ((Date.now() - last.ranAt.getTime()) / 3_600_000).toFixed(1)
+      return {
+        results,
+        closedStale: hidden.count,
+        notes: `Skipped: last successful JSearch run was ${ago}h ago (minimum ${minHours}h). Add ?force=1 to override.`,
+      }
+    }
+  }
 
-  return { results, closedStale: stale.count + staleJs.count }
+  let fetched = 0
+  let skipped = 0
+  let added = 0
+  let error: string | undefined
+
+  try {
+    const r = await fromJSearch()
+    fetched = r.rows
+    const good = r.jobs.filter(isGood) // real link + readable text + English
+    skipped = r.rows - good.length // not IT, not English, or unreadable
+    if (good.length > 0) added = (await persist(good, runStart)).added
+    if (r.errors.length) error = r.errors.join(' | ').slice(0, 500)
+  } catch (e: any) {
+    error = String(e?.message ?? e).slice(0, 500)
+  }
+
+  results.JSearch = { fetched, skipped, added, closed: 0, error }
+  await prisma.externalJobSyncLog.create({
+    data: { source: 'JSearch', fetched, added, error: error ?? null },
+  })
+
+  // search-based feed: close postings not seen for JSEARCH_KEEP_DAYS
+  const keepDays = Number(process.env.JSEARCH_KEEP_DAYS) || 21
+  const stale = await prisma.externalJob.updateMany({
+    where: { isActive: true, source: 'JSearch', lastSeenAt: { lt: new Date(Date.now() - keepDays * day) } },
+    data: { isActive: false },
+  })
+
+  return { results, closedStale: stale.count + hidden.count }
 }

@@ -4,7 +4,8 @@ import { Prisma } from '@prisma/client'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 
-// GET /api/external-jobs?q=&role=&company=&mode=&type=&hasEmail=&source=&page=&facets=1
+// GET /api/external-jobs?q=&role=&company=&mode=&type=&hasEmail=&page=&facets=1
+// Only JSearch jobs are ever returned.
 export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions)
@@ -16,14 +17,17 @@ export async function GET(req: Request) {
     const company = p.get('company')
     const mode = p.get('mode')
     const type = p.get('type')
-    const source = p.get('source')
     const hasEmail = p.get('hasEmail') === 'true'
     const wantFacets = p.get('facets') === '1'
     const page = Math.max(1, Number(p.get('page')) || 1)
     const pageSize = 20
 
-    // only readable postings are ever shown
-    const base: Prisma.ExternalJobWhereInput = { isActive: true, summary: { not: null } }
+    // only readable JSearch postings are ever shown
+    const base: Prisma.ExternalJobWhereInput = {
+      isActive: true,
+      source: 'JSearch',
+      summary: { not: null },
+    }
 
     const where: Prisma.ExternalJobWhereInput = { ...base }
     const and: Prisma.ExternalJobWhereInput[] = []
@@ -46,7 +50,6 @@ export async function GET(req: Request) {
     if (company) where.company = company
     if (mode) where.workMode = mode
     if (type) where.jobType = type
-    if (source) where.source = source
 
     const [jobs, total, lastSync] = await Promise.all([
       prisma.externalJob.findMany({
@@ -56,7 +59,10 @@ export async function GET(req: Request) {
         take: pageSize,
       }),
       prisma.externalJob.count({ where }),
-      prisma.externalJobSyncLog.findFirst({ where: { error: null }, orderBy: { ranAt: 'desc' } }),
+      prisma.externalJobSyncLog.findFirst({
+        where: { source: 'JSearch', error: null },
+        orderBy: { ranAt: 'desc' },
+      }),
     ])
 
     let facets = undefined

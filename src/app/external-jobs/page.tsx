@@ -125,8 +125,8 @@ export default function ExternalJobsPage() {
       <main className="mx-auto max-w-5xl px-5 py-10">
         <h1 className="font-serif text-3xl font-bold text-zinc-900">Company openings</h1>
         <p className="mt-2 text-sm text-zinc-600">
-          Jobs collected straight from company career pages. Applying happens on the company&apos;s own site.
-          Refreshed every 6 hours
+          IT jobs in English, collected from Google for Jobs and job boards. Applying happens on the employer&apos;s own site.
+          Refreshed once a day
           {lastSyncedAt && <>, last update {formatRelativeTime(lastSyncedAt)}</>}.
           {syncing && <span className="text-red-600"> Refreshing now…</span>}
         </p>
