@@ -292,14 +292,19 @@ function jsearchRequest(
   if (country) params.set('country', country)
 
   if (provider === 'openwebninja') {
+    const headers: Record<string, string> = { 'x-api-key': key }
     return {
       url: `https://api.openwebninja.com/jsearch/search?${params}`,
-      headers: { 'x-api-key': key },
+      headers,
     }
+  }
+  const headers: Record<string, string> = {
+    'X-RapidAPI-Key': key,
+    'X-RapidAPI-Host': 'jsearch.p.rapidapi.com',
   }
   return {
     url: `https://jsearch.p.rapidapi.com/search?${params}`,
-    headers: { 'X-RapidAPI-Key': key, 'X-RapidAPI-Host': 'jsearch.p.rapidapi.com' },
+    headers,
   }
 }
 
